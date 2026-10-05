@@ -67,7 +67,8 @@ with st.sidebar:
                 f"策略版本：{meta.get('version')} · `{meta.get('config_hash')}`")
     st.caption("資料為日線收盤後更新，**不是即時行情**。")
     page = st.radio("頁面", ["🏠 Emerging Leader Radar", "📈 個股分析", "💼 投資組合", "🔬 研究結果",
-                             "🔎 3653 健策 Case Study", "🔄 資料狀態 / 更新資料"])
+                             "🔎 3653 健策 Case Study", "🚀 Momentum Long", "📗 Weinstein Long", "📕 Weinstein Short",
+                             "🎯 High R/R Radar", "⏱ Intraday Replay", "🧾 Phase 2 判決", "🔄 資料狀態 / 更新資料"])
     st.divider()
     st.subheader("Historical Replay")
     asof = st.select_slider("觀察日期（只顯示當時已知資料）", options=list(sig_dates),
@@ -571,5 +572,10 @@ def page_data():
         st.markdown(D.doc("FINMIND_DATA_AUDIT.md"))
 
 
+import phase2_pages as P2  # noqa: E402
+
 {"🏠 Emerging Leader Radar": page_radar, "📈 個股分析": page_stock, "💼 投資組合": page_portfolio,
- "🔬 研究結果": page_research, "🔎 3653 健策 Case Study": page_case, "🔄 資料狀態 / 更新資料": page_data}[page]()
+ "🔬 研究結果": page_research, "🔎 3653 健策 Case Study": page_case, "🚀 Momentum Long": P2.page_momentum,
+ "📗 Weinstein Long": P2.page_weinstein_long, "📕 Weinstein Short": P2.page_weinstein_short,
+ "🎯 High R/R Radar": P2.page_highrr, "⏱ Intraday Replay": P2.page_intraday, "🧾 Phase 2 判決": P2.page_verdicts2,
+ "🔄 資料狀態 / 更新資料": page_data}[page]()

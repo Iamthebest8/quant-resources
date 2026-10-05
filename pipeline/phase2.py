@@ -157,25 +157,40 @@ def bootstrap_p(a: np.ndarray, b: np.ndarray, n: int = 2000, seed: int = 7) -> f
 # momentum baseline
 # ---------------------------------------------------------------------------------------------
 def momentum(p, F):
+    """Reproduce the frozen MOMENTUM_LONG_BASELINE (V1) on the phase-2 panel and write MOMENTUM_LONG_RESULTS.csv."""
+    from pipeline.phase2_portfolio import momentum_trades
     from pipeline.run_research import load_frozen, run_tl
     from strategy.metrics import campaign_metrics
-    from strategy.signals import SignalCache, build_arrays
+    from strategy.selection import SignalCache
+    from strategy.signals import build_arrays
     cfg, frozen = load_frozen("V1")
     A = build_arrays(p, F)
     sc = SignalCache(p, F)
-    ref = pd.read_csv(OUT / "frozen" / "MOMENTUM_LONG_BASELINE_reference_metrics.csv")
+    ref = pd.read_csv(OUT / "frozen" / "MOMENTUM_LONG_BASELINE_reference_metrics.csv").set_index("window")
     W = {"DISCOVERY": config.DISCOVERY, "EXTENDED": config.EXTENDED_VALIDATION, "STRICT_OOS": config.STRICT_OOS,
          "FULL": (config.RESEARCH_START, END)}
-    rows, tls = [], {}
+    keys = ("n_probes", "pf", "payoff", "ev_slots_per_probe", "pnl_per_100_slot_days", "win_rate", "ge20",
+            "top5pct_share")
+    rows = []
     for k, w in W.items():
         tl = run_tl(A, sc, cfg, *w)
-        tls[k] = tl
         m = campaign_metrics(tl, years=(pd.Timestamp(w[1]) - pd.Timestamp(w[0])).days / 365.25)
-        rows.append({"window": k, **{x: m.get(x) for x in ("n_probes", "pf", "payoff", "pnl_per_100_slot_days_pct",
-                                                            "win_rate", "ev")}})
+        r = {"table": "REPRODUCTION", "window": k, "source": "phase2_panel(DATA_START=2019-01-01)"}
+        r.update({x: m.get(x) for x in keys})
+        rows.append(r)
+        rr = {"table": "REPRODUCTION", "window": k, "source": "phase1_reference(frozen)"}
+        rr.update({x: ref.at[k, x] if k in ref.index and x in ref.columns else np.nan for x in keys})
+        rows.append(rr)
+        same = all(np.isclose(float(r[x] or np.nan), float(rr[x]), rtol=1e-6, equal_nan=True) for x in keys)
+        rows.append({"table": "REPRODUCTION", "window": k, "source": "MATCH" if same else "DIFFERS"})
     rep = pd.DataFrame(rows)
     log("momentum reproduction:\n" + rep.to_string())
-    return rep, tls, ref, cfg, frozen
+    mt = tag_windows(momentum_trades(p))
+    st_ = stats_table(mt, ["engine"])
+    st_.insert(0, "table", "TRADE_STATS_PER_CAMPAIGN(ret on max size)")
+    out = pd.concat([rep, st_], ignore_index=True)
+    save_csv(out, "MOMENTUM_LONG_RESULTS.csv")
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -295,6 +310,51 @@ def matched_controls(M, p, trades: pd.DataFrame, E: dict, end_idx: int, setups_a
     return df
 
 
+def funnels(p, ctx) -> pd.DataFrame:
+    """Condition funnel (stock-weeks passing each TEXTBOOK condition, cumulative) for W1 / W2 / S1 per window."""
+    from alpha.weinstein import WRULES as R, overhead_count
+    S, wd = ctx.S, ctx.wd
+    ti = p.dates.get_indexer(wd.week_end)
+    st, eplen, sl = S["stage"].to_numpy(), S["ep_len"].to_numpy(), S["slope4"].to_numpy()
+    mrs, rs4, rs13 = ctx.mrs.to_numpy(), ctx.rs_slope4.to_numpy(), ctx.rs_slope13.to_numpy()
+    mkt = ctx.mkt["stage"].to_numpy()[:, 0][:, None]
+    g, gna = ctx.grp_stage_w.to_numpy(), ctx.grp_na.to_numpy()
+    U = p.universe.to_numpy()[ti] & (~(p.disp | p.disp_next)).to_numpy()[ti]
+    C, H, L, ma = wd.close.to_numpy(), wd.high.to_numpy(), wd.low.to_numpy(), S["ma30w"].to_numpy()
+    Rb = np.fmin(S["ep_maxh"].to_numpy(), wd.high.rolling(52, min_periods=1).max().to_numpy())
+    R6 = wd.high.rolling(6, min_periods=6).max().to_numpy()
+    Lo6 = wd.low.rolling(6, min_periods=6).min().to_numpy()
+    max2 = wd.high.rolling(2, min_periods=2).max().to_numpy()
+    oh1 = overhead_count(C, np.fmax(Rb, ma) * 1.003, R["OH_WINDOW"], R["OH_BAND"])
+    oh2 = overhead_count(C, R6 * 1.003, R["OH_WINDOW"], R["OH_BAND"])
+    rs_long = (rs13 >= 0) & ((mrs >= 0) | (rs4 > 0))
+    rs_short = (mrs < 0) | (rs13 < 0)
+    chains = {
+        "W1": [("stage==1", st == 1), ("base>=8w", eplen >= R["BASE_MIN_W"]), ("MA not declining", sl >= -0.01),
+               ("RS_OK_LONG", rs_long), ("OH15<4", oh1 < R["OH_FAIL"]), ("TAIEX stage 1/2", np.isin(mkt, [1, 2])),
+               ("group stage 1/2", gna | np.isin(g, [1, 2]))],
+        "W2": [("stage==2", st == 2), ("stage2 age>=8w", eplen >= R["W2_AGE_MIN"]), ("MA slope>=2%", sl >= 0.02),
+               ("6w high >=2w old", max2 < R6), ("range<=25%", R6 / Lo6 - 1 <= 0.25),
+               ("low near MA (0.97-1.10)", (Lo6 >= ma * 0.97) & (Lo6 <= ma * 1.10)), ("RS_OK_LONG", rs_long),
+               ("OH15<4", oh2 < R["OH_FAIL"]), ("TAIEX stage 1/2", np.isin(mkt, [1, 2])),
+               ("group stage 1/2", gna | np.isin(g, [1, 2]))],
+        "S1": [("stage==3", st == 3), ("top>=6w", eplen >= R["TOP_MIN_W"]), ("MA not rising", sl <= 0.01),
+               ("RS_OK_SHORT", rs_short), ("group stage 3/4", (~gna) & np.isin(g, [3, 4])),
+               ("TAIEX stage 3/4", np.isin(mkt, [3, 4]))],
+    }
+    yr = wd.week_end
+    rows = []
+    for w, (a, b) in {k: WINDOWS[k] for k in ("PRE_2020_2022", "DISCOVERY", "STRICT_OOS")}.items():
+        wm = ((yr >= pd.Timestamp(a)) & (yr <= pd.Timestamp(b))).to_numpy()[:, None]
+        for eng, chain in chains.items():
+            m = U & wm
+            rows.append({"engine": eng, "window": w, "step": 0, "condition": "universe stock-weeks", "n": int(m.sum())})
+            for k, (nm, cond) in enumerate(chain, 1):
+                m = m & cond
+                rows.append({"engine": eng, "window": w, "step": k, "condition": nm, "n": int(m.sum())})
+    return pd.DataFrame(rows)
+
+
 def weinstein(p, F, G, ctx):
     from alpha.trades import attach_weekly, build_mats, trade_stats
     from alpha.weinstein import breakout_events, followup_setups, weekly_setups
@@ -305,6 +365,8 @@ def weinstein(p, F, G, ctx):
     w3 = followup_setups(p, F, ctx, ev_w1, "W3", log=log)
     s2 = followup_setups(p, F, ctx, ev_s1, "S2", log=log)
     allset = pd.concat([setups, w3, s2], ignore_index=True)
+    fn = funnels(p, ctx)
+    fn.to_csv(P2 / "WEINSTEIN_FUNNEL.csv", index=False)
     allset.to_pickle(P2 / "weinstein_setups.pkl")
     M = attach_weekly(build_mats(p, F, G), p, ctx)
     end_idx = int(p.dates.searchsorted(pd.Timestamp(END), side="right") - 1)
@@ -330,6 +392,244 @@ def weinstein(p, F, G, ctx):
     tr.to_pickle(P2 / "weinstein_trades.pkl")
     log(f"weinstein trades: {len(tr)} in {time.time() - t0:.0f}s")
     return allset, tr, M, E, end_idx
+
+
+def short_executability(p, tr: pd.DataFrame) -> pd.DataFrame:
+    """Flag each short trade: PLAIN_TICK_OK (fill >= previous close: allowed for any marginable stock),
+    EXEMPT_PROXY (top-150 TWSE + top-50 TPEx market value that month ~ Taiwan 50 / Mid-Cap 100 / TPEx 50 constituents,
+    which may short below the previous close), MARGIN_ELIGIBLE_PROXY (listed >= 120 trading days, not disposition)."""
+    tr = tr.copy()
+    if tr.empty:
+        return tr
+    e = p.dates.get_indexer(tr["entry_date"])
+    j = tr["j"].astype(int).to_numpy()
+    prev_raw = p.raw_c.to_numpy()[e - 1, j]
+    tr["prev_close_raw"] = prev_raw
+    tr["plain_tick_ok"] = tr["entry_price"].to_numpy() >= prev_raw * 0.9999
+    mv = p.mktval
+    exempt = np.zeros(len(tr), bool)
+    if mv is not None:
+        mvv = mv.reindex(index=p.dates, columns=p.ids).ffill().to_numpy()
+        typ = p.stock_type.reindex(p.ids).to_numpy()
+        for k, (ee, jj) in enumerate(zip(e, j)):
+            row = mvv[ee - 1]
+            if not np.isfinite(row[jj]):
+                continue
+            tw = (typ == "twse") & np.isfinite(row)
+            tp = (typ == "tpex") & np.isfinite(row)
+            if typ[jj] == "twse":
+                exempt[k] = (row[tw] > row[jj]).sum() < 150
+            elif typ[jj] == "tpex":
+                exempt[k] = (row[tp] > row[jj]).sum() < 50
+    tr["exempt_proxy"] = exempt
+    ld = p.listed_days.to_numpy()[e - 1, j]
+    dsp = (p.disp | p.disp_next).to_numpy()[e - 1, j]
+    tr["margin_eligible_proxy"] = (ld >= 120) & ~dsp
+    tr["executable"] = tr["margin_eligible_proxy"] & (tr["plain_tick_ok"] | tr["exempt_proxy"])
+    return tr
+
+
+def weinstein_reports(p, F, G, ctx, allset, tr, M, E, end_idx):
+    from alpha.trades import trade_stats
+    from alpha.verdicts2 import bb_verdict, entry_verdict, short_verdict
+    out = {}
+    main = tr[tr["variant"].isin(["TEXTBOOK", "MODERNIZED"])]
+    # ---------- placebo (matched controls) ----------
+    ctrl = matched_controls(M, p, main, E, end_idx, allset)
+    ctrl = tag_windows(ctrl) if len(ctrl) else ctrl
+    ctrl.to_pickle(P2 / "weinstein_controls.pkl")
+    plac = []
+    for (eng, var), g in main.groupby(["engine", "variant"]):
+        c = ctrl[(ctrl["engine"] == eng) & (ctrl["variant"] == var)] if len(ctrl) else ctrl
+        for w in ("PRE_2020_2022", "DISCOVERY", "STRICT_OOS"):
+            a = g[g["window"] == w]["ret"].to_numpy()
+            b = c[c["window"] == w]["ret"].to_numpy() if len(c) else np.array([])
+            plac.append({"engine": eng, "variant": var, "window": w, "n": len(a), "ev_signal": np.mean(a) if len(a) else np.nan,
+                         "n_control": len(b), "ev_control": np.mean(b) if len(b) else np.nan,
+                         "placebo_p": bootstrap_p(a, b)})
+    plac = pd.DataFrame(plac)
+    out["placebo"] = plac
+    # ---------- long results ----------
+    longs = main[main["side"] == "LONG"]
+    lt = stats_table(longs, ["engine", "variant", "exit"])
+    pooled = stats_table(longs.assign(engine="W_LONG_POOLED"), ["engine", "variant"])
+    pooled["exit"] = "ENGINE_DEFAULT"
+    lt = pd.concat([lt, pooled], ignore_index=True)
+    lt = lt.merge(plac, on=["engine", "variant", "window"], how="left", suffixes=("", "_plc"))
+    # cost / slippage grid (Strict OOS) by re-simulation of the textbook / modern entries
+    grid = []
+    for (eng, var), g in longs.groupby(["engine", "variant"]):
+        st_rows = allset.loc[g["setup_idx"].unique()]
+        if var == "MODERNIZED":
+            st_rows = modern_rows(allset).loc[lambda x: x.index.isin(g["setup_idx"].unique())]
+        exn = g["exit"].iloc[0]
+        for cst in config.COST_GRID:
+            for sb in config.SLIPPAGE_GRID_BPS:
+                if cst == COST and sb == config.BASE_SLIPPAGE_BPS:
+                    sim = g
+                else:
+                    sim = simulate_setups(M, st_rows, exn, E, var, end_idx, cost=cst, slip=sb / 10000)
+                    sim = no_overlap(sim)
+                if len(sim) == 0:
+                    continue
+                sim = sim[(sim["entry_date"] >= WINDOWS["STRICT_OOS"][0]) & (sim["entry_date"] <= WINDOWS["STRICT_OOS"][1])]
+                grid.append({"engine": eng, "variant": var, "exit": exn, "window": "STRICT_OOS_COST_GRID",
+                             "round_trip_cost": cst, "slippage_bps": sb, **trade_stats(sim)})
+    lt = pd.concat([lt, pd.DataFrame(grid)], ignore_index=True)
+    save_csv(lt, "WEINSTEIN_LONG_RESULTS.csv")
+    out["long"] = lt
+    # entry verdicts (TEXTBOOK = the pre-registered primary; MODERNIZED reported)
+    ver = {}
+    for eng in ("W1", "W2", "W3"):
+        for var in ("TEXTBOOK", "MODERNIZED"):
+            g = longs[(longs["engine"] == eng) & (longs["variant"] == var)]
+            o = g[g["window"] == "STRICT_OOS"]
+            m = trade_stats(o)
+            pr = plac[(plac["engine"] == eng) & (plac["variant"] == var) & (plac["window"] == "STRICT_OOS")]
+            ver[(eng, var)] = entry_verdict({"n": m.get("n"), "pf": m.get("pf"), "payoff": m.get("payoff"),
+                                             "ev": m.get("ev"), "placebo_p": pr["placebo_p"].iloc[0] if len(pr) else np.nan,
+                                             "ev_2025": o[o["year"] == "2025"]["ret"].mean(),
+                                             "ev_2026": o[o["year"] == "2026"]["ret"].mean()})
+    out["entry_verdicts"] = ver
+    # ---------- shorts ----------
+    shorts = short_executability(p, main[main["side"] == "SHORT"])
+    srows = []
+    for lab, sub in (("THEORETICAL", shorts), ("EXECUTABLE", shorts[shorts["executable"]] if len(shorts) else shorts)):
+        if len(sub):
+            t = stats_table(sub, ["engine", "variant", "exit"])
+            t["executability"] = lab
+            srows.append(t)
+            t2 = stats_table(sub.assign(engine="S_POOLED"), ["engine", "variant"])
+            t2["executability"] = lab
+            t2["exit"] = "ENGINE_DEFAULT"
+            srows.append(t2)
+    exe_tab = []
+    if len(shorts):
+        for (eng, var, w), g in shorts.groupby(["engine", "variant", "window"]):
+            exe_tab.append({"engine": eng, "variant": var, "window": w, "executability": "AUDIT", "n": len(g),
+                            "plain_tick_ok": g["plain_tick_ok"].mean(), "exempt_proxy": g["exempt_proxy"].mean(),
+                            "margin_eligible_proxy": g["margin_eligible_proxy"].mean(),
+                            "executable": g["executable"].mean()})
+    st_ = pd.concat(srows + [pd.DataFrame(exe_tab)], ignore_index=True) if srows else pd.DataFrame(exe_tab)
+    st_ = st_.merge(plac, on=["engine", "variant", "window"], how="left", suffixes=("", "_plc")) if len(st_) else st_
+    save_csv(st_, "WEINSTEIN_SHORT_RESULTS.csv")
+    shorts.to_pickle(P2 / "weinstein_shorts_exec.pkl")
+    out["short"] = st_
+    sv = {}
+    for var in ("TEXTBOOK", "MODERNIZED"):
+        for lab in ("THEORETICAL", "EXECUTABLE"):
+            g = shorts[(shorts["variant"] == var)] if len(shorts) else shorts
+            if lab == "EXECUTABLE" and len(g):
+                g = g[g["executable"]]
+            o = g[g["window"] == "STRICT_OOS"] if len(g) else g
+            m = trade_stats(o)
+            sv[(var, lab)] = short_verdict({"n": m.get("n", 0), "pf": m.get("pf"), "ev": m.get("ev")},
+                                           executability_verified=False)
+    out["short_verdicts"] = sv
+    # ---------- exit research ----------
+    xr = tr[tr["variant"].isin(["TEXTBOOK", "TEXTBOOK_ENTRY_EXITRESEARCH"])]
+    xt = stats_table(xr, ["engine", "side", "exit"])
+    xt_pool = stats_table(xr[xr["side"] == "LONG"].assign(engine="W_LONG_POOLED"), ["engine", "side", "exit"])
+    xt = pd.concat([xt, xt_pool], ignore_index=True)
+    save_csv(xt, "WEINSTEIN_EXIT_RESEARCH.csv")
+    # Bollinger: freeze the B1 variant with the best DISCOVERY PnL/100 slot-days on pooled W long textbook entries
+    disc = xt_pool[(xt_pool["window"] == "DISCOVERY")]
+    b1 = disc[disc["exit"].str.startswith("BB_B1_")]
+    frz = OUT / "frozen" / "BOLLINGER_EXIT_V1.json"
+    if frz.exists():
+        bb_name = json.loads(frz.read_text(encoding="utf-8"))["exit"]
+    else:
+        bb_name = b1.sort_values("pnl_per_100_slot_days", ascending=False)["exit"].iloc[0] if len(b1) else "BB_B1_20_2_FULL"
+        frz.write_text(json.dumps({"name": "BOLLINGER_EXIT_V1", "exit": bb_name, "frozen_utc": now_utc(),
+                                   "rule": "best DISCOVERY PnL/100 slot-days among B1 variants on pooled W1+W2+W3 "
+                                           "TEXTBOOK entries"}, ensure_ascii=False, indent=1), encoding="utf-8")
+    o = xt_pool[xt_pool["window"] == "STRICT_OOS"].set_index("exit")
+    # textbook exit on pooled entries = engine-specific textbook exits
+    tb_pool = stats_table(tr[(tr["variant"] == "TEXTBOOK") & (tr["side"] == "LONG")].assign(engine="P", exit="TB"),
+                          ["engine", "exit"])
+    tbo = tb_pool[tb_pool["window"] == "STRICT_OOS"].iloc[0]
+    bbo = o.loc[bb_name] if bb_name in o.index else pd.Series(dtype=float)
+    bbv = bb_verdict({"eff": bbo.get("pnl_per_100_slot_days"), "eff_text": tbo.get("pnl_per_100_slot_days"),
+                      "pf": bbo.get("pf"), "pf_text": tbo.get("pf"),
+                      "n30": bbo.get("ge30", np.nan) * bbo.get("n", np.nan),
+                      "n30_text": tbo.get("ge30", np.nan) * tbo.get("n", np.nan)})
+    bb_tab = xt_pool[xt_pool["exit"].str.startswith("BB_") | (xt_pool["exit"].isin(["STOP_STAGE4_ONLY", "MODERN"]))].copy()
+    bb_tab = pd.concat([bb_tab, tb_pool.assign(exit="TEXTBOOK(engine default)", engine="W_LONG_POOLED")], ignore_index=True)
+    bb_tab["frozen_choice"] = bb_tab["exit"] == bb_name
+    save_csv(bb_tab, "BOLLINGER_EXIT_RESULTS.csv")
+    out["bb"] = (bb_name, bbv, bb_tab)
+    # right-tail analysis: how much of big moves each exit keeps (same entries)
+    rt = []
+    xl = xr[xr["side"] == "LONG"]
+    for (ex_, w), g in xl.groupby(["exit", "window"]):
+        for thr in (0.2, 0.3, 0.5):
+            big = g[g["mfe"] >= thr]
+            if len(big) == 0:
+                continue
+            rt.append({"exit": ex_, "window": w, "mfe_threshold": thr, "n_trades": len(g), "n_big_mfe": len(big),
+                       "kept_ratio_mean": float((big["ret"] / big["mfe"]).mean()),
+                       "kept_ratio_median": float((big["ret"] / big["mfe"]).median()),
+                       "giveback_mean": float((big["mfe"] - big["ret"]).mean()),
+                       "n_ret_ge30": int((g["ret"] >= 0.3).sum()), "n_ret_ge50": int((g["ret"] >= 0.5).sum()),
+                       "median_hold_big": float(big["holding_days"].median())})
+    save_csv(pd.DataFrame(rt), "RIGHT_TAIL_EXIT_ANALYSIS.csv")
+    return out
+
+
+def dash_files(p, ctx, allset: pd.DataFrame, tr: pd.DataFrame, extra_trades: pd.DataFrame | None = None):
+    """Dashboard inputs (local files only)."""
+    S = ctx.S
+    wk = ctx.wd.week_end
+    long = []
+    for k, fr in (("close", ctx.wd.close), ("high", ctx.wd.high), ("low", ctx.wd.low), ("vol", ctx.wd.vol),
+                  ("ma30w", S["ma30w"]), ("ma10w", S["ma10w"]), ("stage", S["stage"]), ("mrs", ctx.mrs)):
+        x = fr.astype("float32").stack(future_stack=True)
+        x.name = k
+        long.append(x)
+    W = pd.concat(long, axis=1).reset_index()
+    W.columns = ["date", "stock_id"] + list(W.columns[2:])
+    W = W[W["close"].notna()]
+    W.to_parquet(P2 / "dash_weekly.parquet", index=False)
+    mk = pd.DataFrame({"date": wk, "taiex": ctx.wd.mkt.to_numpy(), "mkt_stage": ctx.mkt["stage"].iloc[:, 0].to_numpy(),
+                       "breadth12": ctx.breadth12.to_numpy()})
+    mk.to_csv(P2 / "dash_market_stage.csv", index=False)
+    # current setups (last week-end)
+    t_last = int(p.dates.get_loc(wk[-1]))
+    cur = allset[(allset["t"] == t_last) & allset["engine"].isin(["W1", "W2", "S1"])].copy()
+    if len(cur):
+        mod = modern_rows(allset)
+        cur["variant_ok"] = np.where(cur["textbook"], "TEXTBOOK", "") + np.where(cur.index.isin(mod.index), "+MODERN", "")
+        cur = cur[cur["variant_ok"] != ""]
+        f = p.raw_c.iloc[t_last] / p.c.iloc[t_last]
+        fac = cur["stock_id"].map(f)
+        for c in ("trigger", "limit", "stop"):
+            cur[f"{c}_raw"] = cur[c] * fac
+        cur["stop_pct"] = (cur["trigger"] - cur["stop"]).abs() / cur["trigger"]
+        cur["name"] = cur["stock_id"].map(p.names)
+        cur["sector"] = cur["stock_id"].map(p.sector)
+    cur.to_csv(P2 / "dash_weinstein_current.csv", index=False)
+    # examples: >= 10 successes and 10 failures per strategy (TEXTBOOK + MODERNIZED + extras)
+    ex = []
+    base = tr[tr["variant"].isin(["TEXTBOOK", "MODERNIZED"])]
+    if extra_trades is not None and len(extra_trades):
+        base = pd.concat([base, extra_trades], ignore_index=True)
+    for (eng, var), g in base.groupby(["engine", "variant"]):
+        g = g[g["entry_date"] >= "2023-01-01"]
+        if len(g) == 0:
+            continue
+        ex.append(g.nlargest(min(10, len(g)), "ret").assign(example="SUCCESS"))
+        ex.append(g.nsmallest(min(10, len(g)), "ret").assign(example="FAILURE"))
+    E_ = pd.concat(ex, ignore_index=True) if ex else pd.DataFrame()
+    if len(E_):
+        E_["name"] = E_["stock_id"].map(p.names)
+        E_["sector"] = E_["stock_id"].map(p.sector)
+        cols = ["example", "engine", "variant", "exit", "stock_id", "name", "sector", "entry_date", "entry_price",
+                "exit_date", "exit_reason", "holding_days", "ret", "r_multiple", "mfe", "mae", "stop_dist_pct",
+                "stop_dist_atr", "window"]
+        E_ = E_[[c for c in cols if c in E_]]
+        E_.to_csv(P2 / "dash_examples.csv", index=False)
+        save_csv(E_, "TRADE_EXAMPLES_PHASE2.csv")
+    return E_
 
 
 WIN3 = {k: WINDOWS[k] for k in ("PRE_2020_2022", "DISCOVERY", "STRICT_OOS")}
@@ -616,9 +916,106 @@ def radar_candidates(p, F, G, ctx, ev, spec) -> pd.DataFrame:
     return df.sort_values("hrr_score", ascending=False).reset_index(drop=True)
 
 
+def portfolio_step(p, F, G, ctx):
+    from alpha.trades import attach_weekly, build_mats, trade_stats
+    from alpha.verdicts2 import hybrid_verdict, portfolio_verdict
+    from pipeline import phase2_portfolio as PF
+    tr = pd.read_pickle(P2 / "weinstein_trades.pkl")
+    shorts = pd.read_pickle(P2 / "weinstein_shorts_exec.pkl")
+    mom = tag_windows(PF.momentum_trades(p))
+    M = attach_weekly(build_mats(p, F, G), p, ctx)
+    E = exit_specs()
+    tb = tr[(tr["variant"] == "TEXTBOOK") & (tr["side"] == "LONG")]
+    # ---- overlap ----
+    sx = shorts[(shorts["variant"] == "TEXTBOOK") & shorts["executable"]]
+    ov = PF.overlap(p, pd.concat([mom, tb, sx], ignore_index=True))
+    save_csv(ov, "ALPHA_OVERLAP_ANALYSIS.csv")
+    # ---- hybrids ----
+    hy = tag_windows(PF.hybrids(p, F, G, ctx, tr, mom, M, E))
+    hy.to_pickle(P2 / "hybrid_trades.pkl")
+    comps = {"MOMENTUM": mom, "WEINSTEIN_LONG_TEXTBOOK": tb.assign(engine="WEINSTEIN_LONG_TEXTBOOK")}
+    rows, pf_res = [], {}
+    oos = WINDOWS["STRICT_OOS"]
+    for name, df in list(comps.items()) + [(k, g) for k, g in hy.groupby("engine")]:
+        t = stats_table(df.assign(engine=name), ["engine"])
+        res = PF.portfolio(p, df.assign(engine=name if name in PF.PRIORITY else df["engine"]), *oos)
+        perf = PF.perf(res["equity"], p.market["adj_close"])
+        pf_res[name] = perf
+        t["portfolio_oos_cagr"] = perf["cagr"]
+        t["portfolio_oos_calmar"] = perf["calmar"]
+        t["portfolio_oos_mdd"] = perf["mdd"]
+        rows.append(t)
+    ht = pd.concat(rows, ignore_index=True)
+    hv = {}
+    for h in ("HYBRID_A", "HYBRID_B", "HYBRID_C", "HYBRID_D"):
+        o = ht[(ht["window"] == "STRICT_OOS")].set_index("engine")
+        if h not in o.index:
+            hv[h] = ("REJECT", "no trades")
+            continue
+        hv[h] = hybrid_verdict({"pf": o.at[h, "pf"], "ev": o.at[h, "ev"], "calmar": pf_res[h]["calmar"],
+                                "pf_comp": [o.at[c, "pf"] for c in comps], "ev_comp": [o.at[c, "ev"] for c in comps],
+                                "calmar_comp": [pf_res[c]["calmar"] for c in comps]})
+    ht["verdict"] = ht["engine"].map(lambda e: hv.get(e, ("", ""))[0])
+    save_csv(ht, "HYBRID_STRATEGY_RESULTS.csv")
+    # ---- multi-alpha portfolio ----
+    sx_all = shorts[(shorts["variant"] == "TEXTBOOK")]
+    book = {
+        "MULTI_ALPHA_V1": pd.concat([mom, tb, sx], ignore_index=True),
+        "MULTI_ALPHA_LONG_ONLY": pd.concat([mom, tb], ignore_index=True),
+        "MOMENTUM_ONLY": mom, "WEINSTEIN_LONG_ONLY": tb,
+        "MULTI_ALPHA_THEORETICAL_SHORTS": pd.concat([mom, tb, sx_all], ignore_index=True),
+    }
+    prow, curves = [], []
+    for name, df in book.items():
+        for w in ("DISCOVERY", "STRICT_OOS", "FULL_2023_2026"):
+            a, b = WINDOWS[w]
+            for lab, xc, xs in (("BASE", 0.0, 0.0), ("STRESS_0.70%+50bps", 0.0025, 0.0025)):
+                res = PF.portfolio(p, df, a, b, extra_cost=xc, extra_slip=xs)
+                pr = PF.perf(res["equity"], p.market["adj_close"])
+                taken = res["taken"]
+                prow.append({"portfolio": name, "window": w, "cost_case": lab, **pr, "n_trades": len(taken),
+                             **{f"n_{e}": int((taken["engine"] == e).sum()) for e in ("MOMENTUM", "W1", "W2", "W3", "S1", "S2")}})
+                if lab == "BASE" and w == "FULL_2023_2026":
+                    curves.append(res["equity"]["equity"].rename(name))
+    pt = pd.DataFrame(prow)
+    eqc = pd.concat(curves, axis=1)
+    eqc["TAIEX"] = p.market["adj_close"].reindex(eqc.index) / p.market["adj_close"].reindex(eqc.index).iloc[0] * config.INITIAL_CAPITAL
+    eqc.to_csv(P2 / "multi_alpha_equity.csv")
+    save_csv(pt, "MULTI_ALPHA_PORTFOLIO.csv")
+    o = pt[(pt["portfolio"] == "MULTI_ALPHA_V1") & (pt["window"] == "STRICT_OOS")].set_index("cost_case")
+    pv = portfolio_verdict({"cagr": o.at["BASE", "cagr"], "sharpe": o.at["BASE", "sharpe"], "mdd": o.at["BASE", "mdd"],
+                            "cagr_stress": o.at["STRESS_0.70%+50bps", "cagr"], "ret_2025": o.at["BASE", "ret_2025"],
+                            "ret_2026": o.at["BASE", "ret_2026"]})
+    out = {"overlap": ov, "hybrids": ht, "hybrid_verdicts": hv, "portfolio": pt, "portfolio_verdict": pv,
+           "momentum_trades": mom}
+    with open(P2 / "portfolio_report.pkl", "wb") as fh:
+        pickle.dump(out, fh)
+    return out
+
+
+def intraday_step(p, F, G, ctx, download: bool = True):
+    from alpha.trades import attach_weekly, build_mats
+    from pipeline import phase2_intraday as PI
+    tr = pd.read_pickle(P2 / "weinstein_trades.pkl")
+    setups = pd.read_pickle(P2 / "weinstein_setups.pkl")
+    out = PI.run(p, F, G, ctx, tr, setups, download=download)
+    frz = OUT / "frozen" / "BOLLINGER_EXIT_V1.json"
+    b2 = pd.DataFrame()
+    if frz.exists():
+        b1 = json.loads(frz.read_text(encoding="utf-8"))["exit"]
+        M = attach_weekly(build_mats(p, F, G), p, ctx)
+        b2 = PI.bollinger_b2_ticks(p, tr, M, b1.replace("BB_B1_", "BB_B2_"), download=download)
+        b2.to_csv(P2 / "bollinger_b2_tick_verification.csv", index=False)
+    with open(P2 / "intraday_report.pkl", "wb") as fh:
+        pickle.dump({"res": out["res"] if out else None, "comp": out["comp"] if out else None,
+                     "imp": out["imp"] if out else None, "frozen": out["frozen"] if out else None, "b2": b2}, fh)
+    return out, b2
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["state", "momentum", "weinstein", "highrr", "all"])
+    ap.add_argument("step", choices=["state", "momentum", "weinstein", "highrr", "portfolio", "intraday", "all"])
+    ap.add_argument("--no-download", action="store_true")
     a = ap.parse_args(argv)
     if a.step == "state":
         build_state()
@@ -627,10 +1024,21 @@ def main(argv=None):
     if a.step in ("momentum", "all"):
         momentum(p, F)
     if a.step in ("weinstein", "all"):
-        weinstein(p, F, G, ctx)
+        allset, tr, M, E, end_idx = weinstein(p, F, G, ctx)
+        rep = weinstein_reports(p, F, G, ctx, allset, tr, M, E, end_idx)
+        with open(P2 / "weinstein_report.pkl", "wb") as fh:
+            pickle.dump({k: v for k, v in rep.items()}, fh)
+        dash_files(p, ctx, allset, tr)
     if a.step in ("highrr", "all"):
         wtr = pd.read_pickle(P2 / "weinstein_trades.pkl") if (P2 / "weinstein_trades.pkl").exists() else None
-        highrr(p, F, G, ctx, wtr)
+        from pipeline.phase2_portfolio import momentum_trades
+        hr = highrr(p, F, G, ctx, wtr, tag_windows(momentum_trades(p)))
+        with open(P2 / "highrr_report.pkl", "wb") as fh:
+            pickle.dump({k: v for k, v in hr.items() if k != "ev"}, fh)
+    if a.step in ("portfolio", "all"):
+        portfolio_step(p, F, G, ctx)
+    if a.step in ("intraday", "all"):
+        intraday_step(p, F, G, ctx, download=not a.no_download)
 
 
 if __name__ == "__main__":

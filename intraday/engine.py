@@ -153,8 +153,14 @@ def day_dataset(sid: str, d: str, side: int, trigger: float, stop: float, atr: f
         r["vol_accel"] = (v60[t] / 60) / (v300[t] / 300) if np.isfinite(v300[t]) and v300[t] > 0 else np.nan
         r["cum_vol_ratio"] = cum_v[t] / (exp_per_sec * (t - first + 1)) if exp_per_sec else np.nan
         # micro stops available at t (PIT)
-        micro_low = np.nanmin(lo[max(first, t - 120):t + 1]) if sgn > 0 else np.nanmax(hi[max(first, t - 120):t + 1])
+        # 5-minute swing extreme (valid only after 300 s of trading) and the session extreme so far (after 60 s)
+        if t - first >= 300:
+            micro_low = np.nanmin(lo[t - 300:t + 1]) if sgn > 0 else np.nanmax(hi[t - 300:t + 1])
+        else:
+            micro_low = np.nan
+        lod_stop = (lod[t] if sgn > 0 else hod[t]) if t - first >= 60 else np.nan
         r["micro_stop"] = micro_low
+        r["lod_stop"] = lod_stop
         # ---- outcomes (future, research labels only) ----
         ep = px[e]
         r["entry_price"] = ep
@@ -174,7 +180,11 @@ def day_dataset(sid: str, d: str, side: int, trigger: float, stop: float, atr: f
         r["stop_dist_daily_atr"] = sgn * (ep - stop) / atr if atr > 0 else np.nan
         r["stop_dist_micro"] = sgn * (ep - micro_low) / ep
         r["stop_dist_micro_atr"] = sgn * (ep - micro_low) / atr if atr > 0 else np.nan
-        r["micro_stop_hit"] = float((fl <= micro_low) if sgn > 0 else (fh >= micro_low))
+        r["micro_stop_hit"] = float((fl <= micro_low) if sgn > 0 else (fh >= micro_low)) if np.isfinite(micro_low) else np.nan
+        r["stop_dist_lod_atr"] = sgn * (ep - lod_stop) / atr if atr > 0 and np.isfinite(lod_stop) else np.nan
+        r["lod_stop_hit"] = float((fl <= lod_stop) if sgn > 0 else (fh >= lod_stop)) if np.isfinite(lod_stop) else np.nan
+        # next-day continuation of the micro stop (does the tighter stop survive to the next close?)
+        r["micro_stop_ok_eod"] = float(not r["micro_stop_hit"]) if np.isfinite(micro_low) else np.nan
         rows.append(r)
     if not rows:
         return None

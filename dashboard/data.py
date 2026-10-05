@@ -129,3 +129,14 @@ def doc(name: str) -> str:
 
 def frozen_config() -> dict:
     return meta().get("config", {})
+
+
+@st.cache_data(show_spinner=False)
+def names() -> dict:
+    try:
+        si = stock_info()
+        col = "name" if "name" in si.columns else si.columns[1]
+        key = "stock_id" if "stock_id" in si.columns else si.index.name
+        return (si.set_index(key)[col] if key in si.columns else si[col]).astype(str).to_dict()
+    except Exception:   # noqa: BLE001
+        return {}

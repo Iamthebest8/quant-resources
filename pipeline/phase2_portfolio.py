@@ -36,6 +36,9 @@ def momentum_trades(p) -> pd.DataFrame:
     pe = pd.read_csv(OUT / "PROBE_EVENTS.csv", dtype={"stock_id": str}, parse_dates=["probe_date", "exit_date"])
     ids = {s: j for j, s in enumerate(p.ids)}
     pe = pe[pe["stock_id"].map(ids).notna()].copy()
+    for c in ("probe_price", "probe_stop", "exit_price"):          # older outputs without *_adj columns
+        if f"{c}_adj" not in pe:
+            pe[f"{c}_adj"] = pe[c]
     out = pd.DataFrame({
         "engine": "MOMENTUM", "variant": "FROZEN_V1", "exit": "V1", "stock_id": pe["stock_id"], "side": "LONG",
         "entry_date": pe["probe_date"], "exit_date": pe["exit_date"], "entry_price_adj": pe["probe_price_adj"],

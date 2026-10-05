@@ -114,5 +114,7 @@ def summarize(P: dict[str, pd.DataFrame], n_days: int, label: str) -> pd.DataFra
                      "daily_stop_hit": float(r["daily_stop_hit"].mean()),
                      "stop_dist_daily_atr": float(r["stop_dist_daily_atr"].median()),
                      "stop_dist_micro_atr": float(r["stop_dist_micro_atr"].median()),
-                     "micro_stop_hit": float(r["micro_stop_hit"].mean())})
+                     "micro_stop_hit": float(r["micro_stop_hit"].mean()),
+                     "stop_dist_lod_atr": float(r["stop_dist_lod_atr"].median()) if "stop_dist_lod_atr" in r else np.nan,
+                     "lod_stop_hit": float(r["lod_stop_hit"].mean()) if "lod_stop_hit" in r else np.nan})
     return pd.DataFrame(rows)

@@ -132,16 +132,28 @@ def learned_trade_ev(p, M, E, rows: pd.DataFrame, cands: pd.DataFrame, wtr: pd.D
         f = raw_factor(p, int(c.e), int(c.j))
         adj_px = r.entry_price / f * (1 + c.side * SLIP)
         if c.strategy == "MOMENTUM_INTRADAY_TRIGGER":
+            # probe-leg return with the campaign's own exit (adds / scaling of V1 are NOT re-simulated)
             ret = c.side * (c.exit_price_adj / adj_px - 1) - COST
             out.append({"cand_id": r.cand_id, "trade_ret_intraday": ret, "trade_ret_daily": c.daily_trade_ret,
-                        "method": "same_exit_new_entry(approx)"})
+                        "method": "probe_leg_same_exit(approx)"})
         else:
             eng = c.engine
             stop_adj = c.stop / f
             res = simulate(M, int(c.j), int(c.t), int(c.side), "open", np.nan, stop_adj, E[TEXTBOOK_EXIT[eng]],
                            end_idx, COST, SLIP, fixed_entry=(int(c.e), adj_px))
+            ms = getattr(r, "micro_stop", np.nan)
+            res_m = None
+            if np.isfinite(ms):
+                ms_adj = ms / f * (1 - c.side * 0.001)      # one tick-ish beyond the 5-min swing extreme
+                res_m = simulate(M, int(c.j), int(c.t), int(c.side), "open", np.nan, ms_adj, E[TEXTBOOK_EXIT[eng]],
+                                 end_idx, COST, SLIP, fixed_entry=(int(c.e), adj_px))
             out.append({"cand_id": r.cand_id, "trade_ret_intraday": res["ret"] if res else np.nan,
-                        "trade_ret_daily": c.daily_trade_ret, "method": "exact_resimulation"})
+                        "trade_ret_daily": c.daily_trade_ret, "method": "exact_resimulation",
+                        "trade_ret_micro_stop": res_m["ret"] if res_m else np.nan,
+                        "r_multiple_micro_stop": res_m["r_multiple"] if res_m else np.nan,
+                        "r_multiple_daily_stop": res["r_multiple"] if res else np.nan,
+                        "stop_dist_atr_daily": res["stop_dist_atr"] if res else np.nan,
+                        "stop_dist_atr_micro": res_m["stop_dist_atr"] if res_m else np.nan})
     return pd.DataFrame(out)
 
 
@@ -171,7 +183,8 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
     E = exit_specs()
     frz_path = OUT / "frozen" / "INTRADAY_TRIGGERS_V1.json"
     frozen = json.loads(frz_path.read_text(encoding="utf-8")) if frz_path.exists() else {}
-    res_rows, ev_rows, thr_rows, comp_rows = [], [], [], []
+    from data.ticks import sec_to_time
+    res_rows, ev_rows, thr_rows, comp_rows, pol_rows = [], [], [], [], []
     models = {}
     strategies = sorted(ds["strategy"].unique())
     for strat in strategies:
@@ -196,6 +209,14 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
         models[strat] = model
         for split, dd in (("TRAIN", tr), ("TEST", te)):
             P = policies(dd, model, thr, after_cross=after)
+            for pk, prow in P.items():
+                if prow is None or len(prow) == 0:
+                    continue
+                keep = prow[["cand_id", "stock_id", "date", "sec", "entry_price", "fwd_15m", "fwd_60m", "fwd_eod",
+                             "mfe_eod", "mae_eod", "stop_dist_daily_atr", "stop_dist_micro_atr", "trigger", "stop"]].copy()
+                keep["utility"] = utility(prow).to_numpy()
+                keep["entry_time"] = [sec_to_time(int(x) + 1) for x in keep["sec"]]
+                pol_rows.append(keep.assign(strategy=strat, split=split, policy=pk))
             sm = summarize(P, dd["cand_id"].nunique(), split)
             sm.insert(0, "strategy", strat)
             sm["baseline_policy"] = "OPEN" if not after else "A_BREAKOUT_IMMEDIATE"
@@ -219,9 +240,13 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
                                       "p_vs_open": p_open, "p_vs_breakout": p_brk,
                                       "p": max(p_open, p_brk) if np.isfinite(p_brk) else p_open,
                                       "trade_ev_learned": float(ev["trade_ret_intraday"].mean()),
-                                      "trade_ev_daily": float(cands[cands["strategy"] == strat].merge(
+                                      # same-method comparison: baseline policy (daily entry) re-priced the same way
+                                      "trade_ev_daily": float(evb["trade_ret_intraday"].mean()),
+                                      "trade_ev_daily_simulator": float(cands[cands["strategy"] == strat].merge(
                                           dd[["cand_id"]].drop_duplicates(), on="cand_id")["daily_trade_ret"].mean()),
-                                      "trade_ev_baseline_intraday": float(evb["trade_ret_intraday"].mean()),
+                                      "trade_ev_method": ev["method"].iloc[0] if len(ev) else "",
+                                      "stop_dist_lod_atr_learned": float(L["stop_dist_lod_atr"].median()),
+                                      "lod_stop_hit_learned": float(L["lod_stop_hit"].mean()),
                                       "stop_dist_daily_atr_learned": float(L["stop_dist_daily_atr"].median()),
                                       "stop_dist_micro_atr_learned": float(L["stop_dist_micro_atr"].median()),
                                       "stop_dist_daily_atr_baseline": float(bl["stop_dist_daily_atr"].median()),
@@ -231,6 +256,8 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
                     ev_rows.append(ev.assign(strategy=strat, policy="LEARNED"))
                     ev_rows.append(evb.assign(strategy=strat, policy=base_k))
     frz_path.write_text(json.dumps(frozen, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    if pol_rows:
+        pd.concat(pol_rows, ignore_index=True).to_csv(P2 / "intraday_policy_entries.csv", index=False)
     res = pd.concat([r if isinstance(r, pd.DataFrame) else pd.DataFrame([r]) for r in res_rows], ignore_index=True)
     comp = pd.DataFrame(comp_rows)
     save_csv(res, "INTRADAY_TRIGGER_RESULTS.csv")
@@ -267,3 +294,48 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
         imp.to_csv(P2 / "intraday_feature_importance.csv", index=False)
     log(f"[intraday] done in {time.time() - t0:.0f}s")
     return {"res": res, "comp": comp, "imp": imp, "ds": ds, "cands": cands, "frozen": frozen}
+
+
+def bollinger_b2_ticks(p, tr: pd.DataFrame, M, exit_name: str, download: bool = True) -> pd.DataFrame:
+    """1-second verification of Bollinger B2 exits (Strict OOS): exact crossing second of yesterday's band and the
+    fill at the next second vs the daily stop-proxy fill used in the simulator."""
+    from data.ticks import bars_1s, sec_to_time
+    n_, k_ = int(exit_name.split("_")[2]), float(exit_name.split("_")[3])
+    up, dn = M.BB[(n_, k_)]
+    sub = tr[(tr["exit"] == exit_name) & tr["exit_reason"].str.startswith("BB_B2", na=False)
+             & (tr["window"] == "STRICT_OOS")].copy()
+    if sub.empty:
+        return pd.DataFrame()
+    req = pd.DataFrame({"stock_id": sub["stock_id"], "date": sub["exit_date"].dt.strftime("%Y-%m-%d")})
+    write_requests(req, "tick_requests_bollinger_b2.csv")
+    if download:
+        from data.ticks import download as dl
+        dl(req.drop_duplicates(), log=log, index_too=False)
+    rows = []
+    for r in sub.itertuples():
+        d = p.dates.get_loc(r.exit_date)
+        j = int(r.j)
+        side = 1 if r.side == "LONG" else -1
+        f = raw_factor(p, d, j)
+        lvl = (up[d - 1, j] if side > 0 else dn[d - 1, j]) * f
+        b = bars_1s(r.stock_id, str(pd.Timestamp(r.exit_date).date()))
+        if b is None or not np.isfinite(lvl):
+            rows.append({"stock_id": r.stock_id, "exit_date": r.exit_date, "status": "NO_TICKS"})
+            continue
+        px = b["close"].to_numpy(float)
+        lo = b["low"].to_numpy(float)
+        hi = b["high"].to_numpy(float)
+        hit = (lo <= lvl) if side > 0 else (hi >= lvl)
+        hit &= b["has_trade"].to_numpy()
+        if not hit.any():
+            rows.append({"stock_id": r.stock_id, "exit_date": r.exit_date, "status": "NO_CROSS_IN_TICKS"})
+            continue
+        s = int(np.argmax(hit))
+        fill = px[min(s + 1, len(px) - 1)]
+        o = px[int(np.argmax(b["has_trade"].to_numpy()))]
+        proxy = min(o, lvl) if side > 0 else max(o, lvl)
+        rows.append({"stock_id": r.stock_id, "exit_date": r.exit_date, "status": "OK", "band_level_raw": lvl,
+                     "cross_second": s, "cross_time": sec_to_time(s), "fill_1s_raw": fill, "proxy_fill_raw": proxy,
+                     "fill_diff_pct": side * (fill / proxy - 1), "close_raw": px[-1],
+                     "close_vs_fill_pct": side * (px[-1] / fill - 1)})
+    return pd.DataFrame(rows)
