@@ -1,0 +1,38 @@
+{
+ "registered_utc": "2026-10-05T17:08:23Z",
+ "note": "Phase-2 verdict criteria registered BEFORE any Weinstein/High-R/R/intraday 2025-2026 result was computed.",
+ "criteria": {
+  "MOMENTUM_LONG": {
+   "ACCEPT": "frozen MOMENTUM_LONG_BASELINE meets the phase-1 FULL_SYSTEM criteria in Strict OOS",
+   "WATCH": "OOS trade-level PF >= 1.0 and EV > 0"
+  },
+  "WEINSTEIN_ENTRY": {
+   "ACCEPT": "OOS n >= 40, PF >= 1.5, payoff >= 2.5, EV > 0, EV beats matched non-signal controls (bootstrap one-sided p < 0.10), EV > 0 in both 2025 and 2026YTD",
+   "WATCH": "OOS PF >= 1.15 and EV > 0"
+  },
+  "HIGH_RR_FILTER": {
+   "ACCEPT": "OOS: frozen High-R/R top tercile vs all events of the same engine: higher EV AND higher payoff AND higher P(ret>=20%), and filtered PF >= 1.5",
+   "WATCH": "OOS filtered EV higher than unfiltered"
+  },
+  "ONE_SECOND_EXECUTION": {
+   "ACCEPT": "TEST split: frozen LEARNED trigger beats OPEN and BREAKOUT_IMMEDIATE on mean utility (MFE-|MAE|, EOD) with bootstrap p < 0.10 AND the multi-day trade EV with learned entry >= EV with the daily entry",
+   "WATCH": "TEST utility of LEARNED > OPEN"
+  },
+  "WEINSTEIN_SHORT": {
+   "ACCEPT": "OOS n >= 30, PF >= 1.3, EV > 0 after short costs, AND short executability verified (not available -> capped at WATCH)",
+   "WATCH": "OOS PF >= 1.0 and EV > 0"
+  },
+  "BOLLINGER_EXIT": {
+   "ACCEPT": "OOS on the same frozen entries: frozen Bollinger variant beats the textbook exit on PnL/100 slot-days AND PF, while keeping >= 75% of the textbook exit's >=30% winners",
+   "WATCH": "OOS PF higher than textbook exit"
+  },
+  "HYBRID": {
+   "ACCEPT": "OOS frozen hybrid beats BOTH its component engines on PF and EV, and its 10-slot portfolio Calmar >= the better component's",
+   "WATCH": "OOS hybrid beats at least one component on PF and EV"
+  },
+  "MULTI_ALPHA_PORTFOLIO": {
+   "ACCEPT": "OOS 10-slot: CAGR > 0, Sharpe >= 0.8, MDD >= -25%, CAGR > 0 at 0.70%+50bps, 2025 > 0 and 2026YTD > 0",
+   "WATCH": "OOS CAGR > 0 and Sharpe >= 0.4"
+  }
+ }
+}
