@@ -14,6 +14,8 @@ Data flow:  FinMind API -> raw local cache (this module) -> engine.panel (clean 
 """
 from __future__ import annotations
 
+import copy
+import fcntl
 import json
 import logging
 import os
@@ -306,6 +308,7 @@ class FinMindCache:
         self.manifest_path = Path(manifest_path)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.manifest = self._load_manifest()
+        self._base = copy.deepcopy(self.manifest)   # what this process loaded (for merge-on-save)
 
     # -- manifest ------------------------------------------------------------
     def _load_manifest(self) -> dict:
@@ -317,9 +320,30 @@ class FinMindCache:
         return {"datasets": {}, "capabilities": {}, "last_refresh_utc": None, "source": config.DATA_SOURCE}
 
     def save_manifest(self) -> None:
-        tmp = self.manifest_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.manifest, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
-        tmp.replace(self.manifest_path)
+        """Merge-on-save under a file lock, so concurrent downloaders (daily history + tick files) never
+        overwrite each other's entries: only entries/keys THIS process changed since load are applied."""
+        lock_path = self.manifest_path.with_suffix(".lock")
+        with open(lock_path, "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                disk = self._load_manifest()
+                mine, base = self.manifest, self._base
+                for ds, ents in mine.get("datasets", {}).items():
+                    b = base.get("datasets", {}).get(ds, {})
+                    tgt = disk.setdefault("datasets", {}).setdefault(ds, {})
+                    for k, v in ents.items():
+                        if b.get(k) != v:
+                            tgt[k] = v
+                for k, v in mine.items():
+                    if k != "datasets" and base.get(k) != v:
+                        disk[k] = v
+                tmp = self.manifest_path.with_suffix(f".{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(disk, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+                tmp.replace(self.manifest_path)
+                self.manifest = disk
+                self._base = copy.deepcopy(disk)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
 
     def entry(self, dataset: str, key: str) -> dict | None:
         return self.manifest["datasets"].get(dataset, {}).get(key)
@@ -384,11 +408,13 @@ class FinMindCache:
         old = self.read(dataset, key)
         ent = self.entry(dataset, key) or {}
         fetch_start = start
+        covers_start = False
         if not old.empty and ent.get("max_date"):
             cached_min = ent.get("requested_start", ent.get("min_date"))
-            if cached_min and cached_min <= start:
+            covers_start = bool(cached_min and cached_min <= start)
+            if covers_start:
                 fetch_start = (pd.Timestamp(ent["max_date"]) - timedelta(days=overlap_days)).date().isoformat()
-            if ent.get("checked_until") and ent["checked_until"] >= end:
+            if covers_start and ent.get("checked_until") and ent["checked_until"] >= end:
                 return old
         new = self._require_client().fetch(dataset, data_id=data_id, start_date=fetch_start, end_date=end)
         if old.empty:

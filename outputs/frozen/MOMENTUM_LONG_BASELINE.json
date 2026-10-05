@@ -1,0 +1,61 @@
+{
+ "name": "MOMENTUM_LONG_BASELINE",
+ "alias_of": "V1",
+ "hash": "eba0cff4a970",
+ "frozen_utc": "2026-10-05T16:07:23Z",
+ "config": {
+  "version": "V1",
+  "disc_features": [
+   "hl_flag",
+   "resid_5",
+   "cex_10",
+   "srs_5",
+   "is_cnt10"
+  ],
+  "watch_q": 0.8,
+  "disc_q": 0.9,
+  "probe_q": 0.95,
+  "trigger": "indep",
+  "regime_filter": "all",
+  "max_stop_dist": 0.08,
+  "max_gap": 0.06,
+  "fail": "F1+F2+F3+F4",
+  "time_stop": 5,
+  "f3_thresh": -0.04,
+  "probe_max_life": 20,
+  "confirm": "persist",
+  "min_days_confirm": 2,
+  "add_arch": "A",
+  "exit": "MP",
+  "mfe_trigger": 0.15,
+  "cooldown": 5,
+  "max_probes": 2,
+  "capital_arch": "A",
+  "probe_reserve": 1.0,
+  "notes": {}
+ },
+ "discovery_features": {
+  "STRUCT": {
+   "feature": "hl_flag",
+   "lift": 1.2582
+  },
+  "MKT_REL": {
+   "feature": "resid_5",
+   "lift": 1.2152
+  },
+  "PERSIST": {
+   "feature": "cex_10",
+   "lift": 1.21
+  },
+  "SECTOR_REL": {
+   "feature": "srs_5",
+   "lift": 1.1903
+  },
+  "INDEP": {
+   "feature": "is_cnt10",
+   "lift": 1.1553
+  }
+ },
+ "note": "Original Emerging Leader / Momentum long engine, frozen on Discovery 2023-2024. Never overwritten; Weinstein factors are tested as separate engines/hybrids against it.",
+ "v1_reference_metrics_file": "outputs/TRADE_LEVEL_SUMMARY.csv (validation run 2026-10-05)"
+}

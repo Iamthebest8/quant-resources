@@ -37,7 +37,7 @@ for _p in (CACHE_DIR, RAW_DIR, PIT_DIR, OUT_DIR, LOG_DIR):
 # ---------------------------------------------------------------------------
 # Periods (Parts 36-41)
 # ---------------------------------------------------------------------------
-DATA_START = "2021-06-01"          # warm-up for RS120 / 250D highs / beta
+DATA_START = "2019-01-01"          # warm-up: RS120, 250D highs, 30-week MA, multi-year overhead supply
 RESEARCH_START = "2023-01-01"
 DISCOVERY = ("2023-01-01", "2024-12-31")
 EXTENDED_VALIDATION = ("2024-01-01", "2026-09-03")

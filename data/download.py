@@ -118,7 +118,10 @@ def download(full_start: str = config.DATA_START, end: str | None = None, case_i
     #    history: one request per stock (small payloads); afterwards new trading days are
     #    appended with one all-market request per day when the account allows it.
     bulk_ok = _cap_ok(cache, "個股日線 (全市場單日 bulk)")
-    have = {sid for sid in universe_ids if cache.path("TaiwanStockPrice", sid).exists()}
+    def _covered(ds, sid):
+        ent = cache.entry(ds, sid) or {}
+        return cache.path(ds, sid).exists() and ent.get("requested_start", "9999") <= full_start
+    have = {sid for sid in universe_ids if _covered("TaiwanStockPrice", sid)}
     missing = [sid for sid in universe_ids if sid not in have]
     summary["price_mode"] = "per_stock_history+bulk_incremental" if bulk_ok else "per_stock"
     log(f"[price] {len(missing)} ids need history; {len(have)} cached")
@@ -151,7 +154,7 @@ def download(full_start: str = config.DATA_START, end: str | None = None, case_i
     # 2b. FinMind adjusted prices (primary daily-return source; `spread` is 0 on ex-dividend days)
     adj_ok = _cap_ok(cache, "還原股價") is not False
     if adj_ok:
-        have_a = {sid for sid in universe_ids if cache.path("TaiwanStockPriceAdj", sid).exists()}
+        have_a = {sid for sid in universe_ids if _covered("TaiwanStockPriceAdj", sid)}
         miss_a = [sid for sid in universe_ids if sid not in have_a]
         log(f"[adj] {len(miss_a)} ids need TaiwanStockPriceAdj history")
         for i, sid in enumerate(miss_a):
@@ -221,15 +224,19 @@ def download(full_start: str = config.DATA_START, end: str | None = None, case_i
 def bulk_incremental(cache: FinMindCache, ids: list[str], end: str, log=print,
                      dataset: str = "TaiwanStockPrice") -> int:
     """Append new trading days to per-stock caches using one all-market request per day."""
-    maxd = []
+    maxd = {}
     for sid in ids:
         ent = cache.entry(dataset, sid) or {}
         if ent.get("max_date"):
-            maxd.append(ent["max_date"])
+            maxd[sid] = ent["max_date"]
     if not maxd:
         return 0
-    # the latest date most stocks already have (delisted names stop earlier)
-    last = pd.Series(maxd).value_counts().index[0]
+    # only names that were still trading recently (delisted names stop earlier and must not drag the
+    # catch-up window back years); `last` = the latest date most of those active names already have
+    newest = pd.Timestamp(max(maxd.values()))
+    active = {s: d for s, d in maxd.items() if pd.Timestamp(d) >= newest - timedelta(days=30)}
+    ids = sorted(active)
+    last = pd.Series(list(active.values())).value_counts().index[0]
     days = [d for d in trading_dates(cache, last, end) if d > last]
     if not days:
         return 0
