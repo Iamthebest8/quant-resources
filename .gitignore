@@ -102,3 +102,18 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# ---- Emerging Leader project ----
+# secrets (also covered above): never commit
+.env
+*.env
+!.env.example
+# local data caches (raw FinMind downloads, PIT datasets, synthetic test data)
+data/cache/*
+!data/cache/.gitkeep
+data/pit/
+data/cache_synthetic/
+data/pit_synthetic/
+outputs_synthetic/
+*.parquet
+logs/
