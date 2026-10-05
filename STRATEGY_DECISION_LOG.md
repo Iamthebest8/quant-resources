@@ -19,9 +19,41 @@
 | 2026-10-05 17:40 | — | 修正（尚未看到任何結果）：MODERNIZED 停損文字的矛盾（「結構距離 > 3 ATR 不做」與「2.5 ATR 上限」並存），改為先過濾、後設上限 | 文字一致性 |
 | 2026-10-05 17:36 | — | 修正（只看到 synthetic 測試資料）：HIGH R/R 分數排除 RISK family，因為停損距離與停損感知結果有機械關聯 | 方法正確性，非績效考量 |
 
-## B. 執行紀錄
+## B. 執行紀錄（2026-10-05）
 
-（回測完成後依序附上：Weinstein、High R/R、1 秒、出場、整合、判決）
+| 時間 (UTC) | 事件 | 說明 |
+|---|---|---|
+| 17:13–18:03 | 資料 | 2019 年起的價格與還原價回補完成。中途兩次中斷：FinMind 每小時額度上限，以及 proxy 連線錯誤（自動重試）。期間發現兩個下載程式同時寫 manifest 的競態，改為加鎖合併寫入後修正 |
+| 17:52 | MOMENTUM 重現 | 凍結 V1 在 2019 延伸面板上的結果在四捨五入誤差內（OOS PF 1.120 vs 1.123；DISCOVERY 試單 692 vs 695）。官方基準仍採 Phase 1 凍結的交易紀錄 |
+| 17:53 | 暫時性跑批 | 使用未完成回補的資料試跑 Weinstein，只用來除錯。當時凍結的 `BOLLINGER_EXIT_V1` 與 `INTRADAY_TRIGGERS_V1` 中，前者**刪除**，最終資料上依同一規則重新凍結 |
+| 18:06 | 正式狀態 | 2,065 檔、2019-01 起的 PIT 面板，週線 Stage 狀態建置完成 |
+| 18:07 | 正式 Weinstein、High R/R、投組 | `HIGH_RR_SCORE_V1` 依 §L 規則自動凍結 |
+| 18:09 | **Bug 修正（出場研究）** | 原本每種出場各自做「同股不重疊」篩選，造成不同出場的進場集合不同（200–259 筆）。改為所有出場都使用 TEXTBOOK 凍結進場（238／43 筆），符合事前登錄的「same frozen entries」。依同一規則重新凍結 `BOLLINGER_EXIT_V1`，結果仍為 `BB_B1_30_2_FULL`。舊版移到 `outputs/phase2/BOLLINGER_EXIT_V1_discarded_flawed_comparison.json` |
+| 18:12 | HIGH_RR_STAGE2_SCORE_V1 加對照組 | 加入同週隨機 Stage 2 對照，結果沒有增量（p = 0.30／0.79／0.59） |
+| 18:14 | **Bug 修正（價格尺度）** | FinMind `TaiwanStockPriceAdj` 是以查詢起日為基準的**前復權**。2019 回補後，Phase 1 紀錄的 `*_adj` 價格與 Phase 2 面板不同尺度，導致 HYBRID_D（當時的定義）出現 PF 7 的假象。改用未還原價乘上 Phase 2 的 adj/raw 因子換算。動能投組的市值計算與 1 秒動能的多日 EV 也一併修正 |
+| 18:16–18:25 | 1 秒 | 下載 925 個 Weinstein 候選日的 tick |
+| 18:00 | **Bug 修正（1 秒微停損）** | 原定義為「近 120 秒最低點」，在開盤時退化成進場價本身。改為 5 分鐘擺盪低點（滿 300 秒後才有效）加當日低點 |
+| 18:26 | **Bug 修正（1 秒政策取列）** | `groupby().first()` 會用後面秒數的非空值補前面的空值，造成前視。改為 `drop_duplicates(keep="first")`。Utility 欄位從未為空，所以凍結門檻不受影響；只有微停損欄位改變 |
+| 18:20 | 補登錄 §A2 | 使用者規格的 HIGH_RR_STAGE2_SETUP、HYBRID_C、HYBRID_D 在計算前先行登錄 |
+| 18:23 | Stage 1 突破對照 | 未過濾的 Stage 1 突破 vs 同日隨機股票：PRE p = 0.02、DISC p = 0.73、OOS p < 0.001 |
+| 18:24 | 放空資料層 | FinMind 融券表（`Note` 含 X 視為停券）。結果依然 REJECT |
+| 18:29 | 重疊分類 | 依 PART 36 分成 Momentum only／Weinstein only／Both |
+| 18:30 | 出場投組指標 | 各出場的 10-slot 投組 CAGR／MDD |
+| 18:33 | **判決** | 依 `alpha/verdicts2.py` 事前門檻產生 `PHASE2_VERDICTS.csv` |
+
+### 看過 OOS 後**沒有**改動的規則
+
+所有 `W_TEXTBOOK_V1`、`W_MODERNIZED_V1`、`WEINSTEIN_SHORT_V1`、`HIGH_RR_SCORE_V1`、`BOLLINGER_EXIT_V1`、`INTRADAY_TRIGGERS_V1` 的常數都沒有改。上述的修正都是程式錯誤或比較設計錯誤，而且結論的方向在修正前後一致。
+
+### 新假說（只能以新版本、從新的 OOS 起點驗證）
+
+| 版本 | 內容 | 證據與限制 |
+|---|---|---|
+| `W1_CORE_V2` | 未過濾的 Stage 1 → 2 突破，次日開盤進場、10 日低停損、TEXTBOOK 出場 | 三期中兩期顯著優於隨機；DISCOVERY 不成立 |
+| `W_LONG_STOP_STAGE4_V2` | 只用結構停損 + Stage 4 出場 | OOS 最佳，DISCOVERY 差 |
+| `BOLLINGER_EXIT_V2_HALF` | Bollinger 失敗時只出 50% | OOS PF 6.5–7.0，並保留右尾 |
+| `HYBRID_D` | 動能試單 → Weinstein 確認 → 加碼 | 投組 Calmar 1.46；DISCOVERY PF 只有 1.10 |
+| 只用族群過濾 | 族群 Stage 3／4 不買、不用大盤 Stage 過濾 | 三期一致 |
 
 ## A2. 補登錄（2026-10-05 18:20 UTC）：依使用者原始規格（PART 37／38）定義
 

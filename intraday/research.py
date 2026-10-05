@@ -47,12 +47,13 @@ def build(cands: pd.DataFrame, step: int = 15, log=print) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 def _first(ds: pd.DataFrame, mask: pd.Series) -> pd.DataFrame:
     sub = ds[mask]
-    return sub.sort_values("sec").groupby("cand_id", as_index=False).first()
+    # first ROW per candidate (groupby.first() would fill NaN columns from later rows -> look-ahead)
+    return sub.sort_values(["cand_id", "sec"]).drop_duplicates("cand_id", keep="first")
 
 
 def policy_rows(ds: pd.DataFrame, model=None, thr: float | None = None) -> dict[str, pd.DataFrame]:
     P = {}
-    P["OPEN"] = ds.sort_values("sec").groupby("cand_id", as_index=False).first()
+    P["OPEN"] = ds.sort_values(["cand_id", "sec"]).drop_duplicates("cand_id", keep="first")
     crossed = ds["crossed"] > 0
     P["BREAKOUT_IMMEDIATE"] = _first(ds, crossed)
     P["BREAKOUT_HOLD_60S"] = _first(ds, crossed & (ds["secs_since_cross"] >= 60) & (ds["dist_trigger"] > 0))

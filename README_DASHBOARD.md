@@ -92,3 +92,34 @@ python -m pytest -q tests/test_pit.py     # 截斷資料重算比對，驗證無
 - **找不到 FINMIND_TOKEN** → 確認專案根目錄 `.env`。
 - **FinMind 請求上限** → client 會自動等待重試（HTTP 402）。
 - **雲端環境連不到 FinMind** → 需在環境 Network access 允許 `api.finmindtrade.com`。
+
+## Phase 2（Weinstein／High R/R／1 秒／出場／整合）
+
+### 重跑順序
+
+每一步只讀寫本地快取。需要 FinMind 的步驟會從 `.env` 讀取 token，token 不會顯示在畫面上。
+
+```bash
+python -m data.download                 # 增量更新日線與還原價（從 2019-01 起）
+python -m pipeline.phase2 state         # 建立 PIT 面板、特徵、幾何特徵、週線 Stage（約 3 分鐘）
+python -m pipeline.phase2 momentum      # 凍結 MOMENTUM_LONG_BASELINE 重現
+python -m pipeline.phase2 weinstein     # W1／W2／W3／S1／S2：TEXTBOOK、MODERNIZED、出場研究
+python -m pipeline.phase2 highrr        # High R/R 特徵研究與 HIGH_RR_SCORE_V1（已凍結就沿用）
+python -m pipeline.phase2 userspec      # 使用者規格的 HIGH_RR_STAGE2_SETUP（7 條件）
+python -m data.short_data --ids-file outputs/phase2/short_stock_ids.csv   # 融券、借券資料
+python -m pipeline.phase2 shortdata     # 放空可執行性（資料層）
+python -m pipeline.phase2 portfolio     # 重疊分析、Hybrids、多 alpha 10-slot 投組
+python -m pipeline.phase2 intraday      # 下載 tick 並做 1 秒研究；--no-download --reuse 可重用資料集
+python -m pipeline.phase2 dash          # High R/R Radar（PART 47）與成功／失敗案例
+python -m pipeline.phase2_report        # 十項裁決 → PHASE2_VERDICTS.csv
+```
+
+### 凍結檔與 Dashboard
+
+- 凍結檔在 `outputs/frozen/`：
+  - `HIGH_RR_SCORE_V1.json`
+  - `BOLLINGER_EXIT_V1.json`
+  - `INTRADAY_TRIGGERS_V1.json`
+  - `MOMENTUM_LONG_BASELINE.json`
+- 已存在的凍結檔**不會被覆寫**。
+- Dashboard 新增六個分頁：🚀 Momentum Long、📗 Weinstein Long、📕 Weinstein Short、🎯 High R/R Radar、⏱ Intraday Replay（1 秒價格、VWAP、Bollinger、觸發價與停損、各政策的進場秒數）、🧾 Phase 2 判決。

@@ -1,0 +1,6 @@
+{
+ "name": "BOLLINGER_EXIT_V1",
+ "exit": "BB_B1_30_2_FULL",
+ "frozen_utc": "2026-10-05T18:10:25Z",
+ "rule": "best DISCOVERY PnL/100 slot-days among B1 variants on pooled W1+W2+W3 TEXTBOOK entries"
+}

@@ -23,3 +23,17 @@ Bollinger Fail-to-Hold 是另一組出場研究，見 `BOLLINGER_FAIL_TO_HOLD_RE
 ## 結果
 
 見 `WEINSTEIN_LONG_RESULTS.csv`（`variant = MODERNIZED`），以及本文件末段。
+
+## 回測結果摘要
+
+| 引擎 | DISC n／PF | OOS n／PF |
+|---|---|---|
+| W1 MODERNIZED | 0 | 1（無法評估） |
+| W2 MODERNIZED | 39／1.34 | 4／3.86 |
+| W3 MODERNIZED | 63／1.01 | 42／**0.24** |
+
+**結論**：現代化版本**比原書版差**。
+
+- 「領導股 + 緊 ATR 停損」幾乎排除了所有 Stage 1 基底股；緊停損也把右尾砍掉。
+- 在台股，原書的寬停損加 Stage 出場較好。
+- MA10w 出場（MODERN）在相同進場上：OOS PF 2.57，TEXTBOOK 為 5.04（`WEINSTEIN_EXIT_RESEARCH.csv`）。

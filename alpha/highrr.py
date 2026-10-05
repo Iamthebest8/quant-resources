@@ -277,6 +277,11 @@ def _feature_value(p, F, G, ctx, f, t, j, key) -> float:
         return float(key.at[(t, j), f])
     except KeyError:
         pass
+    if f in ("mrs", "rs_slope13", "rs_slope4", "grp_stage2_pct"):
+        frame = {"mrs": ctx.mrs, "rs_slope13": ctx.rs_slope13, "rs_slope4": ctx.rs_slope4,
+                 "grp_stage2_pct": ctx.grp_stage2_pct}[f]
+        k = ctx.wd.week_end.searchsorted(p.dates[t], side="right") - 1
+        return float(frame.iat[k, j]) if k >= 0 else np.nan
     if f in G:
         return float(G[f].iat[t, j])
     if f in F:

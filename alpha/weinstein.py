@@ -309,7 +309,7 @@ def weekly_setups(p, F, G, ctx: WContext, log=print) -> pd.DataFrame:
     mkt_ma150 = (mkt_c_d / mkt_c_d.rolling(150, min_periods=120).mean() - 1).to_numpy()[ti]
     breadth = ctx.breadth12.to_numpy()
     g2pct = ctx.grp_stage2_pct.to_numpy()
-    n_days_next = np.r_[np.diff(ti), 0]       # trading days in the following week
+    n_days_next = np.r_[np.diff(ti), 5]       # trading days in the following week (live week: assume 5)
 
     rows = []
     # ---------------- W1 ----------------
@@ -334,7 +334,7 @@ def weekly_setups(p, F, G, ctx: WContext, log=print) -> pd.DataFrame:
     def emit(mask, engine, side, trig, stop, level, oh, extra_mask=None):
         wi, js = np.nonzero(mask if extra_mask is None else (mask | extra_mask))
         for i, j in zip(wi, js):
-            if i + 1 >= len(ti) or n_days_next[i] <= 0:
+            if n_days_next[i] <= 0:
                 continue
             t = ti[i]
             a = atr[i, j]

@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config  # noqa: E402
 from pipeline.phase2 import COST, END, OUT, P2, SLIP, bootstrap_p, log, now_utc, save_csv  # noqa: E402
 
+ROOT_DIR = config.ROOT if not config.IS_SYNTHETIC else OUT
+
 BREAKOUT_STRATS = {"WEINSTEIN_BREAKOUT_TRIGGER", "WEINSTEIN_SHORT_TRIGGER_S1"}
 
 
@@ -35,7 +37,8 @@ def raw_factor(p, t, j) -> float:
 
 
 def candidates_momentum(p, F) -> pd.DataFrame:
-    pe = pd.read_csv(OUT / "PROBE_EVENTS.csv", dtype={"stock_id": str}, parse_dates=["signal_date", "probe_date"])
+    pe = pd.read_csv(OUT / "PROBE_EVENTS.csv", dtype={"stock_id": str}, parse_dates=["signal_date", "probe_date",
+                                                                                        "exit_date"])
     rows = []
     ids = {s: j for j, s in enumerate(p.ids)}
     vol20 = p.vol.rolling(20, min_periods=15).mean()
@@ -46,14 +49,16 @@ def candidates_momentum(p, F) -> pd.DataFrame:
         e = p.dates.get_loc(r.probe_date)
         t = e - 1
         f = raw_factor(p, t, j)
+        x = p.dates.get_indexer([pd.Timestamp(r.exit_date)])[0] if pd.notna(r.exit_date) else -1
+        exit_adj = r.exit_price * raw_factor(p, x, j) if x >= 0 else np.nan   # phase-2 scale (see momentum_trades)
         rows.append({"cand_id": f"MOM_{r.stock_id}_{r.probe_date.date()}", "strategy": "MOMENTUM_INTRADAY_TRIGGER",
                      "stock_id": r.stock_id, "date": str(r.probe_date.date()), "side": 1,
                      "trigger": p.h.iat[t, j] * f, "stop": r.probe_stop, "atr": F["atr"].iat[t, j] * f,
                      "prev_close": p.raw_c.iat[t, j], "adv_lots": vol20.iat[t, j] / 1000,
                      "next_close": p.raw_c.iat[e + 1, j] if e + 1 < len(p.dates) else np.nan,
-                     "t": t, "j": j, "e": e, "daily_entry_adj": r.probe_price_adj,
+                     "t": t, "j": j, "e": e, "daily_entry_adj": r.probe_price * raw_factor(p, e, j),
                      "daily_trade_ret": r.pnl_slots / r.probe_size if r.probe_size else np.nan,
-                     "exit_price_adj": r.exit_price_adj, "baseline": "OPEN"})
+                     "exit_price_adj": exit_adj, "baseline": "OPEN"})
     return pd.DataFrame(rows)
 
 
@@ -101,7 +106,7 @@ def policies(ds: pd.DataFrame, model=None, thr=None, after_cross: bool = False) 
     from intraday.research import _first
     P = {}
     base = ds[ds["crossed"] > 0] if after_cross else ds
-    P["OPEN"] = ds.sort_values("sec").groupby("cand_id", as_index=False).first()
+    P["OPEN"] = ds.sort_values(["cand_id", "sec"]).drop_duplicates("cand_id", keep="first")
     crossed = ds["crossed"] > 0
     P["A_BREAKOUT_IMMEDIATE"] = _first(ds, crossed)
     P["B_BREAKOUT_HOLD_60S"] = _first(ds, crossed & (ds["secs_since_cross"] >= 60) & (ds["dist_trigger"] > 0))
@@ -157,7 +162,8 @@ def learned_trade_ev(p, M, E, rows: pd.DataFrame, cands: pd.DataFrame, wtr: pd.D
     return pd.DataFrame(out)
 
 
-def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, download: bool = True):
+def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, download: bool = True,
+        reuse: bool = False):
     from alpha.trades import attach_weekly, build_mats
     from intraday.engine import FEATURES, utility
     from intraday.research import TRAIN_END, build, choose_threshold, fit_model, summarize
@@ -173,7 +179,13 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
         from data.ticks import download as dl
         log(f"[intraday] downloading ticks for {cw[['stock_id', 'date']].drop_duplicates().shape[0]} Weinstein days")
         dl(cw[["stock_id", "date"]].drop_duplicates(), log=log)
-    ds = build(cands, step=step, log=log)
+    dsp = P2 / "intraday_dataset.pkl"
+    if reuse and dsp.exists():
+        ds = pd.read_pickle(dsp)
+        ds = ds[ds["cand_id"].isin(set(cands["cand_id"]))].drop(columns=["baseline"], errors="ignore")
+        log(f"[intraday] reused dataset {len(ds):,} rows")
+    else:
+        ds = build(cands, step=step, log=log)
     if ds.empty:
         log("[intraday] no tick data available")
         return None
@@ -238,7 +250,7 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
                                       "u_breakout": float(utility(P["A_BREAKOUT_IMMEDIATE"]).mean())
                                       if len(P["A_BREAKOUT_IMMEDIATE"]) else np.nan,
                                       "p_vs_open": p_open, "p_vs_breakout": p_brk,
-                                      "p": max(p_open, p_brk) if np.isfinite(p_brk) else p_open,
+                                      "p": (p_brk if after else (max(p_open, p_brk) if np.isfinite(p_brk) else p_open)),
                                       "trade_ev_learned": float(ev["trade_ret_intraday"].mean()),
                                       # same-method comparison: baseline policy (daily entry) re-priced the same way
                                       "trade_ev_daily": float(evb["trade_ret_intraday"].mean()),
@@ -268,9 +280,11 @@ def run(p, F, G, ctx, wtr: pd.DataFrame, setups: pd.DataFrame, step: int = 15, d
     if thr_rows:
         pd.concat(thr_rows, ignore_index=True).to_csv(P2 / "intraday_threshold_selection.csv", index=False)
     # dataset sample CSV (full dataset is a pickle, too large for git)
-    smp = ds.groupby("strategy", group_keys=False).apply(lambda g: g[g["cand_id"].isin(
-        g["cand_id"].drop_duplicates().sample(min(15, g["cand_id"].nunique()), random_state=1))])
-    save_csv(smp, "INTRADAY_ENTRY_EVENT_DATASET.csv")
+    pick = (ds[["strategy", "cand_id"]].drop_duplicates().groupby("strategy")["cand_id"]
+            .apply(lambda x: list(x.sample(min(4, len(x)), random_state=1))))
+    smp = ds[ds["cand_id"].isin({c for v in pick for c in v})]
+    smp.to_csv(ROOT_DIR / "INTRADAY_ENTRY_EVENT_DATASET.csv", index=False, encoding="utf-8-sig", float_format="%.6g")
+    log(f"wrote INTRADAY_ENTRY_EVENT_DATASET.csv sample ({len(smp)} rows; full dataset: outputs/phase2/intraday_dataset.pkl)")
     # feature importance proxy: permutation on TEST utility for each model
     imp_rows = []
     for strat, model in models.items():

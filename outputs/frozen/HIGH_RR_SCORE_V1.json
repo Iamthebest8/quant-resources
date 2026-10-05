@@ -1,0 +1,41 @@
+{
+ "name": "HIGH_RR_SCORE_V1",
+ "frozen_utc": "2026-10-05T18:07:38Z",
+ "features": {
+  "UPSIDE": {
+   "feature": "room_h250",
+   "sign": -1,
+   "mono_discovery": -0.9999999999999999,
+   "mono_pre": -0.19999999999999998
+  },
+  "RS": {
+   "feature": "rs_slope13",
+   "sign": 1,
+   "mono_discovery": 0.9878787878787878,
+   "mono_pre": 0.4787878787878787
+  },
+  "OVERHEAD": {
+   "feature": "resdays10",
+   "sign": -1,
+   "mono_discovery": -0.9393939393939393,
+   "mono_pre": -0.7696969696969697
+  },
+  "SECTOR": {
+   "feature": "srs_20",
+   "sign": 1,
+   "mono_discovery": 0.9757575757575757,
+   "mono_pre": 0.28484848484848485
+  },
+  "EXTENSION": {
+   "feature": "dist_ma150",
+   "sign": 1,
+   "mono_discovery": 0.8909090909090909,
+   "mono_pre": 0.17575757575757575
+  }
+ },
+ "rule": "<=1 feature per family; |Spearman of DISCOVERY decile means of ret_s40| >= 0.6; sign agrees with PRE 2020-22; top-5 families by |D10-D1 spread| (DISCOVERY); score = mean of signed weekly cross-sectional percentiles",
+ "selection_windows": [
+  "DISCOVERY",
+  "PRE_2020_2022"
+ ]
+}

@@ -14,3 +14,13 @@
 ## 結果
 
 見 `WEINSTEIN_SHORT_RESULTS.csv`（`variant = MODERNIZED`），以及 `SHORT_EXECUTABILITY_AUDIT.md`。
+
+## 回測結果摘要
+
+| 版本 | 期間 | n | PF | EV |
+|---|---|---|---|---|
+| MODERNIZED pooled | OOS（理論） | 143 | 0.66 | −1.4% |
+| MODERNIZED pooled | OOS（可執行資料版） | 48 | 0.41 | −2.3% |
+| MODERNIZED pooled | PRE | 194 | 1.01 | ≈ 0 |
+
+**裁決：REJECT**。

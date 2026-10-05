@@ -29,16 +29,25 @@ import config  # noqa: E402
 from pipeline.phase2 import COST, END, OUT, P2, SLIP, WINDOWS, log, save_csv, stats_table  # noqa: E402
 
 PRIORITY = {"W3": 0, "W1": 1, "W2": 2, "MOMENTUM": 3, "S2": 4, "S1": 5, "HYBRID_A": 3, "HYBRID_B": 1,
-            "HYBRID_C": 0, "HYBRID_D": 3, "HIGH_RR_STAGE2": 2}
+            "HYBRID_C": 1, "HYBRID_D": 3, "HYBRID_C_ALT": 0, "HYBRID_D_ALT": 3, "HIGH_RR_STAGE2": 2}
 
 
 def momentum_trades(p) -> pd.DataFrame:
     pe = pd.read_csv(OUT / "PROBE_EVENTS.csv", dtype={"stock_id": str}, parse_dates=["probe_date", "exit_date"])
     ids = {s: j for j, s in enumerate(p.ids)}
     pe = pe[pe["stock_id"].map(ids).notna()].copy()
-    for c in ("probe_price", "probe_stop", "exit_price"):          # older outputs without *_adj columns
-        if f"{c}_adj" not in pe:
-            pe[f"{c}_adj"] = pe[c]
+    # Phase-1 *_adj prices are on the phase-1 adjustment scale. FinMind TaiwanStockPriceAdj is FORWARD-adjusted
+    # relative to the query start date, and the phase-2 panel was re-downloaded from 2019, so the scales differ.
+    # Convert from the RAW prices with the phase-2 panel's adj/raw factor of the same day.
+    fac = (p.c / p.raw_c).to_numpy()
+    e_i = p.dates.get_indexer(pe["probe_date"])
+    x_i = p.dates.get_indexer(pd.to_datetime(pe["exit_date"]))
+    j_i = pe["stock_id"].map(ids).astype(int).to_numpy()
+    fe = fac[e_i, j_i]
+    fx = np.where(x_i >= 0, fac[np.clip(x_i, 0, None), j_i], np.nan)
+    pe["probe_price_adj"] = pe["probe_price"] * fe
+    pe["probe_stop_adj"] = pe["probe_stop"] * fe
+    pe["exit_price_adj"] = pe["exit_price"] * fx
     out = pd.DataFrame({
         "engine": "MOMENTUM", "variant": "FROZEN_V1", "exit": "V1", "stock_id": pe["stock_id"], "side": "LONG",
         "entry_date": pe["probe_date"], "exit_date": pe["exit_date"], "entry_price_adj": pe["probe_price_adj"],
@@ -102,8 +111,32 @@ def overlap(p, trades: pd.DataFrame, window: int = 10) -> pd.DataFrame:
             for b in engines:
                 if a < b:
                     cr.append({"engine": a, "other": b, "window": w, "daily_pnl_corr": c.at[a, b]})
-    return pd.concat([ov.assign(table="ENTRY_OVERLAP"), pd.DataFrame(cr).assign(table="PNL_CORRELATION")],
-                     ignore_index=True)
+    # PART 36: Momentum only / Weinstein only / Both (same stock entered by the other family within +-window days)
+    from alpha.trades import trade_stats
+    fam = tr["engine"].map(lambda e: "MOMENTUM" if e == "MOMENTUM" else ("WEINSTEIN" if e in ("W1", "W2", "W3") else "OTHER"))
+    tr = tr.assign(family=fam)
+    keys = {f: tr[tr["family"] == f].groupby("stock_id")["e"].apply(np.array).to_dict() for f in ("MOMENTUM", "WEINSTEIN")}
+    cls = []
+    for r in tr.itertuples():
+        if r.family not in ("MOMENTUM", "WEINSTEIN"):
+            cls.append("OTHER")
+            continue
+        other = keys["WEINSTEIN" if r.family == "MOMENTUM" else "MOMENTUM"].get(r.stock_id, np.array([]))
+        both = bool(len(other) and np.any(np.abs(other - r.e) <= window))
+        cls.append("BOTH" if both else f"{r.family}_ONLY")
+    tr["overlap_class"] = cls
+    crows = []
+    for (f, c), g in tr[tr["family"] != "OTHER"].groupby(["family", "overlap_class"]):
+        for w, (s0, s1) in WINDOWS.items():
+            sub = g[(g["entry_date"] >= s0) & (g["entry_date"] <= s1)]
+            if len(sub) == 0:
+                continue
+            st_ = trade_stats(sub)
+            crows.append({"table": "PART36_CLASS", "engine": f, "group": c, "window": w, **{k: st_.get(k) for k in (
+                "n", "win_rate", "pf", "payoff", "ev", "mfe_mean", "mae_mean", "ge20", "ge30", "ge40", "stop_rate",
+                "median_hold")}, "entry_dow_mean": float(sub["entry_date"].dt.dayofweek.mean())})
+    return pd.concat([ov.assign(table="ENTRY_OVERLAP"), pd.DataFrame(cr).assign(table="PNL_CORRELATION"),
+                      pd.DataFrame(crows)], ignore_index=True)
 
 
 # ---------------------------------------------------------------------------------------------

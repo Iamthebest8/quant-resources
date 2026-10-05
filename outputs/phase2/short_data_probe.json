@@ -1,0 +1,72 @@
+[
+ {
+  "dataset": "TaiwanStockMarginPurchaseShortSale",
+  "label": "個股融資融券（含融券餘額、融券限額 ShortSaleLimit、註記 Note）",
+  "status": "OK",
+  "rows": 10,
+  "columns": [
+   "date",
+   "stock_id",
+   "MarginPurchaseBuy",
+   "MarginPurchaseCashRepayment",
+   "MarginPurchaseLimit",
+   "MarginPurchaseSell",
+   "MarginPurchaseTodayBalance",
+   "MarginPurchaseYesterdayBalance",
+   "Note",
+   "OffsetLoanAndShort",
+   "ShortSaleBuy",
+   "ShortSaleCashRepayment",
+   "ShortSaleLimit",
+   "ShortSaleSell",
+   "ShortSaleTodayBalance",
+   "ShortSaleYesterdayBalance"
+  ]
+ },
+ {
+  "dataset": "TaiwanDailyShortSaleBalances",
+  "label": "信用額度總量管制餘額（融券 + 借券賣出餘額）",
+  "status": "OK",
+  "rows": 10,
+  "columns": [
+   "stock_id",
+   "MarginShortSalesPreviousDayBalance",
+   "MarginShortSalesShortSales",
+   "MarginShortSalesShortCovering",
+   "MarginShortSalesStockRedemption",
+   "MarginShortSalesCurrentDayBalance",
+   "MarginShortSalesQuota",
+   "SBLShortSalesPreviousDayBalance",
+   "SBLShortSalesShortSales",
+   "SBLShortSalesReturns",
+   "SBLShortSalesAdjustments",
+   "SBLShortSalesCurrentDayBalance",
+   "SBLShortSalesQuota",
+   "SBLShortSalesShortCovering",
+   "date"
+  ]
+ },
+ {
+  "dataset": "TaiwanStockSecuritiesLending",
+  "label": "借券成交明細（費率）",
+  "status": "OK",
+  "rows": 130,
+  "columns": [
+   "date",
+   "stock_id",
+   "transaction_type",
+   "volume",
+   "fee_rate",
+   "close",
+   "original_return_date",
+   "original_lending_period"
+  ]
+ },
+ {
+  "dataset": "TaiwanTotalMarginPurchaseShortSale",
+  "label": "全市場融資融券",
+  "status": "FinMindError",
+  "rows": 0,
+  "error": "FinMind 錯誤 status=422 msg="
+ }
+]

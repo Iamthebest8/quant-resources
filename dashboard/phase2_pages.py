@@ -24,6 +24,35 @@ WIN_ZH = {"PRE_2020_2022": "Pre 2020–2022", "DISCOVERY": "Discovery 2023–202
           "EXTENDED": "Extended 2024–2026", "FULL_2023_2026": "Full 2023–2026"}
 
 
+TICK_DIR = Path(__file__).resolve().parents[1] / "data" / ("cache_synthetic" if D.SOURCE == "synthetic" else "cache") / "raw" / "TaiwanStockPriceTick"
+SESSION_START, N_SEC = 9 * 3600, 16201
+
+
+def _bars_1s(sid: str, d: str) -> pd.DataFrame | None:
+    """Local 1-second bars from the cached tick file (same logic as data/ticks.bars_1s; the dashboard cannot import the
+    project `data` package because dashboard/data.py shadows it)."""
+    f = TICK_DIR / f"{sid}_{d}.parquet"
+    if not f.exists():
+        return None
+    tk = pd.read_parquet(f)
+    if tk.empty:
+        return None
+    t = tk["Time"].astype(str).str.slice(0, 8)
+    sec = (t.str.slice(0, 2).astype(int) * 3600 + t.str.slice(3, 5).astype(int) * 60 + t.str.slice(6, 8).astype(int)).to_numpy()
+    m = (sec >= SESSION_START) & (sec < SESSION_START + N_SEC)
+    if m.sum() == 0:
+        return None
+    df = pd.DataFrame({"s": sec[m] - SESSION_START, "p": tk["deal_price"].to_numpy(float)[m],
+                       "v": tk["volume"].to_numpy(float)[m]})
+    g = df.groupby("s")
+    b = pd.DataFrame({"high": g["p"].max(), "low": g["p"].min(), "close": g["p"].last(), "volume": g["v"].sum()})
+    full = b.reindex(np.arange(N_SEC))
+    full["has_trade"] = full["close"].notna()
+    full["close"] = full["close"].ffill()
+    full["volume"] = full["volume"].fillna(0.0)
+    return full
+
+
 def _csv(name: str, root: bool = True) -> pd.DataFrame:
     path = (D.DOCS if root else P2) / name
     if not path.exists():
@@ -135,6 +164,9 @@ def page_weinstein_long():
         c1.metric("TAIEX 週線 Stage", STAGE_ZH.get(int(last["mkt_stage"]), "—"))
         c2.metric("全市場 Stage 1+2 比例（breadth）", f"{last['breadth12'] * 100:.0f}%")
         c3.metric("資料週", str(last["date"].date()))
+        if last["date"].dayofweek != 4:
+            st.warning(f"最新一週（{last['date'].date()}）尚未結束：週線 Stage、30 週 MA、掛單價位為**暫定值**，"
+                       "應以該週最後一個交易日收盤後的數值為準（原書 p.68：週末才做決策）。")
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(go.Scatter(x=mk["date"], y=mk["taiex"], name="TAIEX", line=dict(color=C_BLUE)))
         fig.add_trace(go.Scatter(x=mk["date"], y=mk["breadth12"], name="Stage1+2 比例", line=dict(color=C_ORG)),
@@ -177,10 +209,12 @@ def page_weinstein_long():
         if ex.empty:
             _missing("案例")
         else:
-            eng = st.selectbox("引擎", sorted(ex["engine"].unique()))
-            sub = ex[ex["engine"] == eng]
-            st.dataframe(_fmt(sub, pct_cols=("ret", "mfe", "mae", "stop_dist_pct")), hide_index=True,
-                         use_container_width=True)
+            eng = st.selectbox("策略", sorted(ex["strategy"].unique()))
+            sub = ex[ex["strategy"] == eng]
+            st.caption("每套策略 10 筆成功 + 10 筆失敗（2023 年以後進場）。1 秒觸發時間來自 LEARNED 政策（有 tick 資料者）。")
+            st.dataframe(_fmt(sub, pct_cols=("return", "mfe", "mae", "stop_distance_pct"),
+                              num_cols=("pre_trade_rr", "entry_price", "structural_stop", "stop_distance_atr")),
+                         hide_index=True, use_container_width=True)
 
 
 def page_weinstein_short():
@@ -203,28 +237,37 @@ def page_weinstein_short():
 
 def page_highrr():
     st.header("🎯 High R/R Radar")
-    st.caption("每週收盤後更新；Stage 1/2 個股的結構停損、上方空間、上方套牢量、RS、壓縮、量能、延伸度與 "
-               "HIGH_RR_SCORE_V1（Discovery 凍結）。不是即時行情。")
+    st.caption("每週收盤後更新（不是即時行情）。欄位依 PART 47：Stage、大盤／族群 Regime、RS20/40/60、RS 加速、RS 領先、"
+               "抗跌／上漲參與、基底長度／緊縮、ATR／BB 壓縮、突破量、上方壓力／套牢量、結構停損、停損距離、上方空間、PreTradeRR、"
+               "1 秒觸發狀態。研究結論見下方：PreTradeRR 與「上方空間大」在資料中是**負向**的，請勿單獨使用。")
     df = _csv("HIGH_RR_CANDIDATES.csv")
     if df.empty:
         return _missing("HIGH_RR_CANDIDATES.csv")
+    df["symbol"] = df["symbol"].astype(str)
     c1, c2, c3, c4 = st.columns(4)
     stage = c1.multiselect("Stage", [1, 2], default=[2])
-    max_atr = c2.slider("停損距離上限（ATR）", 0.5, 6.0, 3.0, 0.5)
-    min_rr = c3.slider("PRE_TRADE_RR 下限", 0.0, 10.0, 2.0, 0.5)
+    max_atr = c2.slider("停損距離上限（ATR）", 0.5, 12.0, 6.0, 0.5)
+    only_setup = c3.checkbox("只看有策略訊號（W1/W2/Momentum）", value=False)
     lt = c4.multiselect("領導類型", ["SECTOR_CONFIRMED", "INDEPENDENT", "NOT_LEADER"],
-                        default=["SECTOR_CONFIRMED", "INDEPENDENT"])
-    sub = df[df["stage"].isin(stage) & (df["stop_dist_atr"] <= max_atr) & (df["pre_trade_rr"] >= min_rr)
-             & df["leader_type"].isin(lt)]
-    st.markdown(f"符合條件：**{len(sub)}** 檔（資料日 {df['date'].iloc[0]}）")
-    cols = ["stock_id", "name", "sector", "stage", "stage_age_weeks", "hrr_score", "close", "structural_stop",
-            "stop_dist_pct", "stop_dist_atr", "room_to_resistance_pct", "blue_sky", "pre_trade_rr", "supply15",
-            "rs120_pct", "rs_leads120_10d", "mrs", "leader_type", "atr5_20", "vol10_60", "ext_ma60_atr"]
-    st.dataframe(_fmt(sub[[c for c in cols if c in sub]], pct_cols=("stop_dist_pct", "room_to_resistance_pct",
-                                                                    "supply15", "rs120_pct", "mrs"),
-                      num_cols=("hrr_score", "close", "structural_stop", "stop_dist_atr", "pre_trade_rr", "atr5_20",
-                                "vol10_60", "ext_ma60_atr")), hide_index=True, use_container_width=True)
-    with st.expander("HIGH_RR_FEATURE_RESEARCH.md"):
+                        default=["SECTOR_CONFIRMED", "INDEPENDENT", "NOT_LEADER"])
+    sub = df[df["stage"].isin(stage) & (df["stop_distance_atr"] <= max_atr) & df["leader_type"].isin(lt)]
+    if only_setup:
+        sub = sub[sub["strategy"] != "STAGE_WATCH"]
+    st.markdown(f"符合條件：**{len(sub)}** 檔（資料日 {df['date'].iloc[0]}；依 HIGH_RR_SCORE_V1 排序）")
+    cols = ["symbol", "name", "strategy", "stage", "stage_age_weeks", "market_regime", "sector_regime", "hrr_score",
+            "rs20", "rs40", "rs60", "rs_acceleration", "rs_leads_price", "downside_resilience_dcap60",
+            "upside_participation_ucap60", "base_duration_weeks", "base_tightness_10w", "atr_compression_5_20",
+            "bb_width_pct120", "breakout_volume_ratio", "overhead_resistance_pivots15", "overhead_supply_density15",
+            "close", "structural_stop", "stop_distance_pct", "stop_distance_atr", "room_to_resistance_pct", "blue_sky",
+            "pre_trade_rr", "leader_type", "one_second_trigger_status"]
+    st.dataframe(_fmt(sub[[c for c in cols if c in sub]],
+                      pct_cols=("rs20", "rs40", "rs60", "stop_distance_pct", "room_to_resistance_pct",
+                                "overhead_supply_density15", "base_tightness_10w"),
+                      num_cols=("hrr_score", "rs_acceleration", "downside_resilience_dcap60", "upside_participation_ucap60",
+                                "atr_compression_5_20", "bb_width_pct120", "breakout_volume_ratio", "close",
+                                "structural_stop", "stop_distance_atr", "pre_trade_rr")),
+                 hide_index=True, use_container_width=True)
+    with st.expander("HIGH_RR_FEATURE_RESEARCH.md（研究結論）"):
         st.markdown(D.doc("HIGH_RR_FEATURE_RESEARCH.md"))
 
 
@@ -246,8 +289,7 @@ def page_intraday():
     rows = sub[sub["cand_id"] == cid]
     r0 = rows.iloc[0]
     try:
-        from data.ticks import bars_1s, sec_to_time
-        b = bars_1s(str(r0["stock_id"]), str(r0["date"]))
+        b = _bars_1s(str(r0["stock_id"]), str(r0["date"])[:10])
     except Exception as e:     # noqa: BLE001
         st.error(f"讀取 tick 失敗：{type(e).__name__}")
         return
@@ -261,8 +303,19 @@ def page_intraday():
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
     fig.add_trace(go.Scatter(x=b["t"], y=b["close"], name="1 秒價格", line=dict(color=C_BLUE, width=1)), row=1, col=1)
     fig.add_trace(go.Scatter(x=b["t"], y=vwap, name="VWAP", line=dict(color=C_ORG, width=1, dash="dot")), row=1, col=1)
-    fig.add_hline(y=float(r0["trigger"]), line_color=C_UP, line_dash="dash", annotation_text="觸發價", row=1, col=1)
-    fig.add_hline(y=float(r0["stop"]), line_color=C_DN, line_dash="dash", annotation_text="日線結構停損", row=1, col=1)
+    fig.add_hline(y=float(r0["trigger"]), line_color=C_UP, line_dash="dash", annotation_text="觸發價／突破壓力",
+                  row=1, col=1)
+    fig.add_hline(y=float(r0["stop"]), line_color=C_DN, line_dash="dash", annotation_text="日線結構停損（支撐）",
+                  row=1, col=1)
+    try:      # Bollinger 20/2 known BEFORE the session (previous close), unadjusted prices
+        dp = D.prices_stock(str(r0["stock_id"]))
+        rc = dp["raw_close"].loc[:pd.Timestamp(str(r0["date"])) - pd.Timedelta(days=1)].tail(20)
+        if len(rc) == 20:
+            mid, sd = rc.mean(), rc.std()
+            for lvl, nm in ((mid + 2 * sd, "BB 上軌(20,2)"), (mid - 2 * sd, "BB 下軌(20,2)")):
+                fig.add_hline(y=float(lvl), line_color=C_MUTED, line_dash="dot", annotation_text=nm, row=1, col=1)
+    except Exception:   # noqa: BLE001
+        pass
     sym = {"OPEN": "circle", "A_BREAKOUT_IMMEDIATE": "triangle-up", "LEARNED": "star", "B_BREAKOUT_HOLD_60S": "square",
            "C_BREAKOUT_RETEST_HOLD": "diamond", "E_BREAKOUT_VWAP_RECLAIM": "x"}
     for r in rows.itertuples():

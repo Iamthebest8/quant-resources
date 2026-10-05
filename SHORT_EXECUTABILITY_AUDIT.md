@@ -50,3 +50,55 @@
 ## 4. 結果
 
 見本文件末段（回測後附上），以及 `WEINSTEIN_SHORT_RESULTS.csv`（`executability = AUDIT` 列為各旗標比例）。
+
+---
+
+## 4. 結果（2026-10-05 回測）
+
+### 4.1 FinMind 資料探測
+
+| Dataset | 結果 |
+|---|---|
+| `TaiwanStockMarginPurchaseShortSale` | ✅ 可用。含 `ShortSaleLimit`、`ShortSaleTodayBalance`、`Note`（註記代碼，如 `X`、`O`、`@`、`A`、`C`、`D` 等） |
+| `TaiwanDailyShortSaleBalances` | ✅ 可用。含融券與借券賣出的餘額、`MarginShortSalesQuota`、`SBLShortSalesQuota` |
+| `TaiwanStockSecuritiesLending` | ✅ 可用（借券成交與費率） |
+| `TaiwanTotalMarginPurchaseShortSale` | ❌ HTTP 422 |
+
+- 已下載 251 檔有放空交易個股的逐日資料。下載起點為 2022-06，所以 2020–2022 的資料不完整。
+- `Note` 含 `X` 時視為「停止融券」：這是依 TWSE 註記慣例的解讀，**[待查證]**。
+
+### 4.2 每筆空單的可執行性比例
+
+| 引擎 | 期間 | n | 成交價 ≥ 前收 | 豁免代理 | 在融券表內 | 停券（X） | 資料版可執行 |
+|---|---|---|---|---|---|---|---|
+| S1 跌破 | DISCOVERY | 16 | **0%** | 56% | 100% | 0% | 56% |
+| S1 跌破 | STRICT_OOS | 103 | **3%** | 26% | 98% | 5% | **23%** |
+| S2 反彈 | DISCOVERY | 4 | 75% | 75% | 100% | 0% | 100% |
+| S2 反彈 | STRICT_OOS | 42 | 43% | 36% | 98% | 5% | 55% |
+
+**重點**：
+
+- **S1 跌破型 sell-stop 幾乎全部發生在平盤以下**：OOS 只有 3% 的成交價 ≥ 前一日收盤。
+- 只有大型權值股（豁免代理）能在觸發價成交，**約四分之三的 S1 訊號實際上無法執行**。
+- S2 反彈型的條件比較好：43% 在平盤以上成交。
+
+### 4.3 績效（STRICT_OOS，扣借券費與 borrow）
+
+| 版本 | THEORETICAL | EXECUTABLE（代理） | EXECUTABLE_DATA（資料） |
+|---|---|---|---|
+| TEXTBOOK pooled | n = 145，PF 0.54，EV −3.3% | n = 54，PF 0.52，EV −3.2% | n = 47，PF 0.59，EV −2.7% |
+| MODERNIZED pooled | n = 143，PF 0.66，EV −1.4% | n = 55，PF 0.41，EV −2.2% | n = 48，PF 0.41，EV −2.3% |
+
+- PRE（2020–2022）與 DISCOVERY 也都是 PF < 1。唯一例外是 MODERNIZED S1 的 PRE 理論版，PF 1.02、EV ≈ 0。
+
+### 4.4 結論
+
+- **Weinstein Short 沒有獨立 edge**：在 2020–2026 的台股，理論版與可執行版都虧損。
+- 可執行性問題（平盤下限制）會讓 S1 的大部分訊號根本無法執行，但即使忽略這個限制，結果仍然是負的。
+- 依事前登錄的規則判決：**REJECT**。可執行性未完全驗證，原本上限就只能到 WATCH，而實際績效連 WATCH 的門檻（PF ≥ 1、EV > 0）都達不到。
+- 未模擬的偏差：
+  - 停券期強制回補；
+  - 2020-03 等期間的臨時放空禁令；
+  - 券商「無券」。
+  
+  前兩項通常會讓空單結果更差或更不穩定（強制回補偶爾也可能剛好停損），第三項只會減少可交易的訊號。

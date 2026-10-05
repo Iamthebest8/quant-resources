@@ -1,0 +1,18 @@
+{
+ "MOMENTUM_INTRADAY_TRIGGER": {
+  "threshold": 0.0020475701946199784,
+  "frozen_utc": "2026-10-05T18:00:12Z",
+  "train_end": "2024-12-31",
+  "model": "HistGradientBoostingRegressor(depth4,200it,lr.05,leaf200,l2=1,seed0)",
+  "objective": "utility = MFE_EOD - |MAE_EOD| (lambda=1)",
+  "after_cross_only": false
+ },
+ "WEINSTEIN_BREAKOUT_TRIGGER": {
+  "threshold": 0.005213657174125428,
+  "frozen_utc": "2026-10-05T18:24:53Z",
+  "train_end": "2024-12-31",
+  "model": "HistGradientBoostingRegressor(depth4,200it,lr.05,leaf200,l2=1,seed0)",
+  "objective": "utility = MFE_EOD - |MAE_EOD| (lambda=1)",
+  "after_cross_only": true
+ }
+}
