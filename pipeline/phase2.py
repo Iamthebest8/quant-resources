@@ -192,11 +192,12 @@ def exit_specs():
         "MODERN_NOVOL": ExitSpec("MODERN_NOVOL", stage_exit="modern", ma10w_exit=True, breakeven_r=2.0),
         "STOP_STAGE4_ONLY": ExitSpec("STOP_STAGE4_ONLY", stage_exit="modern"),
     }
-    for n, k in ((20, 2.0), (20, 2.5), (30, 2.0)):
-        for part in (1.0, 0.5):
-            nm = f"BB_B1_{n}_{k:g}_{'FULL' if part == 1.0 else 'HALF'}"
-            E[nm] = ExitSpec(nm, bb="B1", bb_n=n, bb_k=k, bb_partial=part,
-                             stage_exit="modern" if part == 1.0 else "investor")
+    for b in ("B1", "B2"):
+        for n, k in ((20, 2.0), (20, 2.5), (30, 2.0)):
+            for part in (1.0, 0.5):
+                nm = f"BB_{b}_{n}_{k:g}_{'FULL' if part == 1.0 else 'HALF'}"
+                E[nm] = ExitSpec(nm, bb=b, bb_n=n, bb_k=k, bb_partial=part,
+                                 stage_exit="modern" if part == 1.0 else "investor")
     return E
 
 

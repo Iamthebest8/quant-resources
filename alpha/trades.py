@@ -250,6 +250,22 @@ def simulate(M: Mats, j: int, t: int, side: int, entry: str, trigger: float, sto
                 pos = 0.0
                 exit_day = d
                 break
+        # Bollinger B2: intraday fail-to-hold = resting stop at YESTERDAY's band once armed (1-second engine
+        # refines the exact second / price on tick data; daily simulation uses this stop-proxy fill)
+        if ex.bb == "B2" and bb_armed and not bb_done and d > e and bbu is not None:
+            lv = bbu[d - 1, j] if side > 0 else bbl[d - 1, j]
+            if np.isfinite(lv) and ((side > 0 and lo <= lv) or (side < 0 and hi >= lv)):
+                locked = (side > 0 and M.LOCK_DN[d, j]) or (side < 0 and M.LOCK_UP[d, j])
+                if not locked:
+                    xp = (min(o, lv) if side > 0 else max(o, lv)) * (1 - side * slip)
+                    q = min(ex.bb_partial, pos)
+                    realized += q * side * (xp / px - 1)
+                    exits.append((d, q, xp, "BB_B2_INTRADAY" if q >= pos - 1e-9 else "BB_B2_INTRADAY_PARTIAL"))
+                    pos -= q
+                    bb_done = True
+                    if pos <= 1e-9:
+                        exit_day = d
+                        break
         slot_days += pos * size
         peak = max(peak, hi) if side > 0 else peak
         trough = min(trough, lo) if side < 0 else trough
@@ -278,6 +294,10 @@ def simulate(M: Mats, j: int, t: int, side: int, entry: str, trigger: float, sto
                 why = why or "MFE_PROTECT"
         if ex.max_hold and d - e + 1 >= ex.max_hold:
             why = why or "TIME"
+        if ex.bb == "B2" and not bb_done and bbu is not None:
+            up, dn = bbu[d, j], bbl[d, j]
+            if (side > 0 and c > up) or (side < 0 and c < dn):
+                bb_armed = True
         if ex.bb == "B1" and not bb_done and bbu is not None:
             up, dn = bbu[d, j], bbl[d, j]
             if side > 0:
