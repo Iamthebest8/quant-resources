@@ -250,7 +250,7 @@
 
 ## 四、研究過程中的重要發現與修正（詳見 `STRATEGY_DECISION_LOG.md` §B）
 
-1. **FinMind 還原價的尺度問題**：`TaiwanStockPriceAdj` 以查詢起日為基準做前復權，不同起日下載的資料尺度不同。已改用未還原價換算，Phase 1 紀錄與 Phase 2 面板可以對齊。
+1. **還原價的尺度問題**：面板的還原價是以日報酬從面板起始日向前複利重建，起始日改變，尺度就改變。FinMind 的 `TaiwanStockPriceAdj` 本身是後復權。已改用未還原價換算，Phase 1 紀錄與 Phase 2 面板可以對齊。（更正：先前誤寫為「FinMind 以查詢起日為基準前復權」）
 2. **出場比較設計**：已修正為所有出場使用相同的凍結進場。
 3. **1 秒 `groupby().first()` 前視**：已修正。
 4. **使用者規格版的 Hybrid C、Hybrid D、HIGH_RR_STAGE2_SETUP**：在計算前補登錄。原本的定義版本保留為 `_ALT` 並照實報告。

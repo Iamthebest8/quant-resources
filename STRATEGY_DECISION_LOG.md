@@ -30,7 +30,7 @@
 | 18:07 | 正式 Weinstein、High R/R、投組 | `HIGH_RR_SCORE_V1` 依 §L 規則自動凍結 |
 | 18:09 | **Bug 修正（出場研究）** | 原本每種出場各自做「同股不重疊」篩選，造成不同出場的進場集合不同（200–259 筆）。改為所有出場都使用 TEXTBOOK 凍結進場（238／43 筆），符合事前登錄的「same frozen entries」。依同一規則重新凍結 `BOLLINGER_EXIT_V1`，結果仍為 `BB_B1_30_2_FULL`。舊版移到 `outputs/phase2/BOLLINGER_EXIT_V1_discarded_flawed_comparison.json` |
 | 18:12 | HIGH_RR_STAGE2_SCORE_V1 加對照組 | 加入同週隨機 Stage 2 對照，結果沒有增量（p = 0.30／0.79／0.59） |
-| 18:14 | **Bug 修正（價格尺度）** | FinMind `TaiwanStockPriceAdj` 是以查詢起日為基準的**前復權**。2019 回補後，Phase 1 紀錄的 `*_adj` 價格與 Phase 2 面板不同尺度，導致 HYBRID_D（當時的定義）出現 PF 7 的假象。改用未還原價乘上 Phase 2 的 adj/raw 因子換算。動能投組的市值計算與 1 秒動能的多日 EV 也一併修正 |
+| 18:14 | **Bug 修正（價格尺度）** | 面板的還原價是以日報酬從**面板起始日**向前複利重建（`engine/panel.py`，基準 = 起始日原始價），所以 `DATA_START` 從 2021-06 改成 2019-01 後，還原價尺度跟著改變。FinMind 的 `TaiwanStockPriceAdj` 本身是**後復權**（最新日 = 原始價）。Phase 1 紀錄的 `*_adj` 價格與 Phase 2 面板因此不同尺度，導致 HYBRID_D（當時的定義）出現 PF 7 的假象。改用未還原價乘上 Phase 2 的 adj/raw 因子換算；動能投組的市值計算與 1 秒動能的多日 EV 也一併修正。（10-06 更正：原紀錄誤寫為「FinMind 以查詢起日為基準前復權」） |
 | 18:16–18:25 | 1 秒 | 下載 925 個 Weinstein 候選日的 tick |
 | 18:00 | **Bug 修正（1 秒微停損）** | 原定義為「近 120 秒最低點」，在開盤時退化成進場價本身。改為 5 分鐘擺盪低點（滿 300 秒後才有效）加當日低點 |
 | 18:26 | **Bug 修正（1 秒政策取列）** | `groupby().first()` 會用後面秒數的非空值補前面的空值，造成前視。改為 `drop_duplicates(keep="first")`。Utility 欄位從未為空，所以凍結門檻不受影響；只有微停損欄位改變 |

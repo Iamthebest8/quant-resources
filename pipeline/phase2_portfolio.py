@@ -36,9 +36,10 @@ def momentum_trades(p) -> pd.DataFrame:
     pe = pd.read_csv(OUT / "PROBE_EVENTS.csv", dtype={"stock_id": str}, parse_dates=["probe_date", "exit_date"])
     ids = {s: j for j, s in enumerate(p.ids)}
     pe = pe[pe["stock_id"].map(ids).notna()].copy()
-    # Phase-1 *_adj prices are on the phase-1 adjustment scale. FinMind TaiwanStockPriceAdj is FORWARD-adjusted
-    # relative to the query start date, and the phase-2 panel was re-downloaded from 2019, so the scales differ.
-    # Convert from the RAW prices with the phase-2 panel's adj/raw factor of the same day.
+    # Phase-1 *_adj prices are on the phase-1 panel scale. The panel rebuilds adjusted prices by compounding daily
+    # returns forward from the panel's first date (engine/panel.py), so moving DATA_START from 2021-06 to 2019-01
+    # changed the scale (FinMind's own PriceAdj is backward-adjusted). Convert from the RAW prices with the
+    # phase-2 panel's adj/raw factor of the same day.
     fac = (p.c / p.raw_c).to_numpy()
     e_i = p.dates.get_indexer(pe["probe_date"])
     x_i = p.dates.get_indexer(pd.to_datetime(pe["exit_date"]))
