@@ -204,7 +204,7 @@ class Campaign:
         A, j, cfg = self.A, self.j, self.cfg
         c = A.C[d, j]
         if not np.isfinite(c):
-            if d >= A.last_valid[j] >= 0 or d >= self.end_idx:
+            if (0 <= A.last_valid[j] < A.T - 1 and d >= A.last_valid[j]) or d >= self.end_idx:
                 self._force_end(d)
             return
         self.slot_days += self.size()
@@ -219,7 +219,8 @@ class Campaign:
             r_s = c / A.C[d - 1, j] - 1
             r_m = A.MKT_C[d] / A.MKT_C[d - 1] - 1
             self.outp_days += int(r_s > r_m)
-        if d >= self.end_idx or (A.last_valid[j] >= 0 and d >= A.last_valid[j]):
+        delisted = 0 <= A.last_valid[j] < A.T - 1 and d >= A.last_valid[j]
+        if d >= self.end_idx or delisted:
             self._close_out(d, c * (1 - self.slip), "END_OF_WINDOW" if d >= self.end_idx else "DELISTED/SUSPENDED")
             return
 
@@ -334,6 +335,14 @@ class Campaign:
             tot += gross - half * l.notional - half * l.notional * self.exit_px / l.px
         return tot
 
+    def raw_px(self, d: int, px: float) -> float:
+        """Convert an adjusted price on day d to the actual (unadjusted) tradable price."""
+        A, j = self.A, self.j
+        k = d
+        while k > 0 and not (np.isfinite(A.RAW_C[k, j]) and np.isfinite(A.C[k, j])):
+            k -= 1
+        return px * A.RAW_C[k, j] / A.C[k, j] if np.isfinite(px) else NaN
+
     def mtm_value(self, d: int) -> float:
         """Market value at close d (for portfolio equity)."""
         A, j = self.A, self.j
@@ -354,25 +363,32 @@ class Campaign:
         adds = [l for l in self.legs if l.kind != "PROBE"]
         add_px = adds[0].px if adds else NaN
         exit_px = self.exit_px
+        rw = self.raw_px
+        last = self.exit_day if self.exit_day >= 0 else A.T - 1     # open (live) campaign -> up to last date
         rec = {
             "stock_id": A.ids[j], "signal_date": dates[self.t],
             "probe_date": dates[self.entry_day] if self.entry_day >= 0 else pd.NaT,
-            "probe_price": self.entry_px, "probe_size": probe.size if probe else NaN,
-            "probe_stop": self.probe_stop0,
+            # *_price = actual unadjusted tradable price; *_adj = total-return adjusted (used for returns)
+            "probe_price": rw(self.entry_day, self.entry_px) if self.legs else NaN, "probe_price_adj": self.entry_px,
+            "probe_size": probe.size if probe else NaN,
+            "probe_stop": rw(self.entry_day, self.probe_stop0) if self.legs else NaN, "probe_stop_adj": self.probe_stop0,
             "probe_risk": 1 - self.probe_stop0 / self.entry_px if self.legs else NaN,
             "rank_score": self.rank,
             "confirmed": self.confirm_day >= 0,
             "confirm_date": dates[self.confirm_day] if self.confirm_day >= 0 else pd.NaT,
-            "confirm_price": self.confirm_px, "confirm_rule": self.confirm_rule,
+            "confirm_price": rw(self.confirm_day, self.confirm_px) if self.confirm_day >= 0 else NaN,
+            "confirm_price_adj": self.confirm_px, "confirm_rule": self.confirm_rule,
             "days_probe_to_confirm": (self.confirm_day - self.entry_day) if self.confirm_day >= 0 else NaN,
             "n_adds": len(adds),
-            "add_date": dates[adds[0].day] if adds else pd.NaT, "add_price": add_px,
+            "add_date": dates[adds[0].day] if adds else pd.NaT,
+            "add_price": rw(adds[0].day, add_px) if adds else NaN, "add_price_adj": add_px,
             "add2_date": dates[adds[1].day] if len(adds) > 1 else pd.NaT,
-            "add2_price": adds[1].px if len(adds) > 1 else NaN,
+            "add2_price": rw(adds[1].day, adds[1].px) if len(adds) > 1 else NaN,
             "full": any(e[1] == "FULL" for e in self.events),
             "max_size": self.size(),
             "exit_date": dates[self.exit_day] if self.exit_day >= 0 else pd.NaT,
-            "exit_price": exit_px, "exit_reason": self.exit_reason, "final_state": self.state,
+            "exit_price": rw(self.exit_day, exit_px) if self.exit_day >= 0 else NaN, "exit_price_adj": exit_px,
+            "exit_reason": self.exit_reason, "final_state": self.state,
             "holding_days": (self.exit_day - self.entry_day + 1) if self.exit_day >= 0 else NaN,
             "invested": inv, "pnl": pnl,
             "pnl_slots": pnl / self.slot_value if self.slot_value else pnl,
@@ -383,8 +399,8 @@ class Campaign:
             "probe_mfe": self.probe_mfe, "probe_mae": self.probe_mae,
             "add_premium": add_px / self.entry_px - 1 if adds else NaN,
             "add_leg_ret": exit_px / add_px - 1 if adds else NaN,
-            "add_mfe": (np.nanmax(A.H[adds[0].day:self.exit_day + 1, j]) / add_px - 1) if adds else NaN,
-            "add_mae": (np.nanmin(A.L[adds[0].day:self.exit_day + 1, j]) / add_px - 1) if adds else NaN,
+            "add_mfe": (np.nanmax(A.H[adds[0].day:last + 1, j]) / add_px - 1) if adds else NaN,
+            "add_mae": (np.nanmin(A.L[adds[0].day:last + 1, j]) / add_px - 1) if adds else NaN,
             "slot_days": self.slot_days, "blocked_adds": self.blocked_adds, "skipped": self.skipped,
         }
         return rec
@@ -395,8 +411,10 @@ class Campaign:
 # one active campaign per stock, cooldown after exit.
 # ---------------------------------------------------------------------------
 def run_campaign_alone(A: Arrays, j: int, t: int, cfg: StrategyConfig, end_idx: int, slip: float, cost: float,
-                       rank: float = NaN, track: bool = False) -> Campaign | None:
-    cp = Campaign(A=A, j=j, t=t, cfg=cfg, slip=slip, cost=cost, end_idx=end_idx, rank=rank, track=track)
+                       rank: float = NaN, track: bool = False, live: bool = False) -> Campaign | None:
+    """live=True: positions still open on the last data date stay open (dashboard / paper trading)."""
+    cp = Campaign(A=A, j=j, t=t, cfg=cfg, slip=slip, cost=cost, end_idx=(A.T + 5) if live else end_idx, rank=rank,
+                  track=track)
     if not cp.init_signal():
         return cp
     d = t + 1
@@ -411,14 +429,15 @@ def run_campaign_alone(A: Arrays, j: int, t: int, cfg: StrategyConfig, end_idx: 
         if not cp.is_open() and not cp.pending:
             break
         d += 1
-    if cp.is_open():
+    if cp.is_open() and not live:
         cp._close_out(end_idx, A.C[end_idx, j] * (1 - slip) if np.isfinite(A.C[end_idx, j]) else cp.entry_px,
                       "END_OF_WINDOW")
     return cp
 
 
 def trade_level(A: Arrays, signal: np.ndarray, cfg: StrategyConfig, start_idx: int, end_idx: int,
-                slip: float, cost: float, rank: np.ndarray | None = None, keep_campaigns: bool = False):
+                slip: float, cost: float, rank: np.ndarray | None = None, keep_campaigns: bool = False,
+                live: bool = False):
     """Run all probe signals in [start_idx, end_idx] independently (capacity-free)."""
     recs, camps = [], []
     T, N = signal.shape
@@ -431,12 +450,14 @@ def trade_level(A: Arrays, signal: np.ndarray, cfg: StrategyConfig, start_idx: i
             if t < free_from:
                 continue
             cp = run_campaign_alone(A, j, t, cfg, end_idx, slip, cost,
-                                    rank[t, j] if rank is not None else NaN, track=keep_campaigns)
+                                    rank[t, j] if rank is not None else NaN, track=keep_campaigns, live=live)
             if cp is None or not cp.legs:
                 continue
             recs.append(cp.record())
             if keep_campaigns:
                 camps.append(cp)
+            if cp.exit_day < 0:
+                break                                   # still open at the end of data (live)
             free_from = cp.exit_day + cfg.cooldown + 1
     df = pd.DataFrame(recs)
     if keep_campaigns:

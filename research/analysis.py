@@ -66,7 +66,7 @@ def capture(ep: pd.DataFrame, camps: pd.DataFrame, dates: pd.DatetimeIndex, lead
             w = g[(g["probe_date"] >= lo) & (g["probe_date"] < e.peak_date)]
             if len(w):
                 rec["any_probe"] = True
-                early = w[w["probe_price"] <= e.start_px * (1 + e.threshold / 2)]
+                early = w[w["probe_price_adj"] <= e.start_px * (1 + e.threshold / 2)]
                 if len(early):
                     f = early.iloc[0]
                     rec.update(early_probe=True, probe_date=f["probe_date"], probe_px=f["probe_price"],

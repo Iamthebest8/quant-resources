@@ -87,14 +87,15 @@ def run_case(p, F, cfg, A, sc, res, symbol: str = config.CASE_SYMBOL, period=con
     only[:, j] = sig[:, j]
     s, e = window_idx(A.dates, config.RESEARCH_START, str(p.dates[-1].date()))
     camps_df, camps = trade_level(A, only, cfg, s, e, config.BASE_SLIPPAGE_BPS / 1e4, config.BASE_COST, rank,
-                                  keep_campaigns=True)
+                                  keep_campaigns=True, live=True)
     daily = {}
     events = []
     for cp in camps:
         for r in cp.daily:
             daily[A.dates[r["day"]]] = r
         for (d, ev, px, sz, why) in cp.events:
-            events.append({"date": A.dates[d], "event": ev, "price": px, "size": sz, "reason": why})
+            events.append({"date": A.dates[d], "event": ev, "price": cp.raw_px(d, px), "price_adj": px, "size": sz,
+                           "reason": why})
     ev = pd.DataFrame(events)
     mk = F["mkt"]
     c = p.c[symbol]
@@ -123,7 +124,8 @@ def run_case(p, F, cfg, A, sc, res, symbol: str = config.CASE_SYMBOL, period=con
         r["disposition"] = bool(p.disp.at[d, symbol])
         dd = daily.get(d)
         if dd:
-            r.update({"campaign_state": dd["state"], "position_size": dd["size"], "stop": dd["stop"],
+            fac = p.raw_c.at[d, symbol] / c.at[d] if np.isfinite(c.at[d]) else np.nan
+            r.update({"campaign_state": dd["state"], "position_size": dd["size"], "stop": dd["stop"] * fac,
                       "dist_stop": dd.get("dist_stop"), "unrealized": dd.get("unrealized"),
                       **{k: v for k, v in dd.items() if k.startswith("conf_")}})
         evd = ev[ev["date"] == d] if len(ev) else ev

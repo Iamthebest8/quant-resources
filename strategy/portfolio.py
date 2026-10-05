@@ -23,7 +23,8 @@ from strategy.signals import Arrays
 def simulate_portfolio(A: Arrays, signal: np.ndarray, rank: np.ndarray, cfg: StrategyConfig, start_idx: int,
                        end_idx: int, cost: float = config.BASE_COST,
                        slip_bps: float = config.BASE_SLIPPAGE_BPS, capital: float = config.INITIAL_CAPITAL,
-                       record_positions: bool = False) -> dict:
+                       record_positions: bool = False, live: bool = False) -> dict:
+    """live=True: positions open on the last data date are kept open (marked to market), not force-closed."""
     slip = slip_bps / 1e4
     half = cost / 2
     N = config.N_SLOTS
@@ -87,8 +88,8 @@ def simulate_portfolio(A: Arrays, signal: np.ndarray, rank: np.ndarray, cfg: Str
         for j, t, rk in pending_new:
             if j in active:
                 continue
-            cp = Campaign(A=A, j=j, t=t, cfg=cfg, slip=slip, cost=cost, slot_value=slot_value, end_idx=end_idx,
-                          rank=rk)
+            cp = Campaign(A=A, j=j, t=t, cfg=cfg, slip=slip, cost=cost, slot_value=slot_value,
+                          end_idx=(A.T + 5) if live else end_idx, rank=rk)
             if not cp.init_signal():
                 continue
             step(cp, lambda cp=cp: cp.on_open(d, lambda k, s, cp=cp: alloc(k, s, cp)))
@@ -119,8 +120,9 @@ def simulate_portfolio(A: Arrays, signal: np.ndarray, rank: np.ndarray, cfg: Str
         if record_positions:
             for cp in active.values():
                 positions.append({"date": A.dates[d], "stock_id": A.ids[cp.j], "state": cp.state,
-                                  "size_slots": cp.size(), "avg_cost": cp.avg_cost(), "close": A.C[d, cp.j],
-                                  "mtm": cp.mtm_value(d), "stop": cp.stop,
+                                  "size_slots": cp.size(), "avg_cost": cp.raw_px(d, cp.avg_cost()),
+                                  "close": cp.raw_px(d, A.C[d, cp.j]), "unrealized": A.C[d, cp.j] / cp.avg_cost() - 1,
+                                  "mtm": cp.mtm_value(d), "stop": cp.raw_px(d, cp.stop),
                                   "probe_date": A.dates[cp.entry_day] if cp.entry_day >= 0 else pd.NaT})
         equity_prev = equity
         # ---- 4. new probe candidates for tomorrow ----------------------------------------------
@@ -134,7 +136,7 @@ def simulate_portfolio(A: Arrays, signal: np.ndarray, rank: np.ndarray, cfg: Str
 
     # force close leftovers at the window end (already done by Campaign at end_idx)
     for cp in active.values():
-        if cp.is_open():
+        if cp.is_open() and not live:
             cp._close_out(end_idx, A.C[end_idx, cp.j] * (1 - slip), "END_OF_WINDOW")
         closed.append(cp)
     eq = pd.DataFrame(daily).set_index("date")

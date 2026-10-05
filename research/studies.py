@@ -103,10 +103,11 @@ def feature_lift_table(D: pd.DataFrame, top_q: float = 0.8) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def select_discovery_features(D: pd.DataFrame, min_lift: float = 1.10) -> dict:
+def select_discovery_features(D: pd.DataFrame, min_lift: float = 1.10, max_families: int = 5) -> dict:
     """Pre-declared selection rule: best vol-controlled-lift feature per DISCOVERY family,
     family kept only if lift >= min_lift and the feature does not raise the -10% MAE rate
-    by more than its leader lift (i.e. not just volatility)."""
+    by more than its leader lift (i.e. not just volatility); at most `max_families`
+    families (highest lift) so the score stays small and explainable (Part 22)."""
     t = feature_lift_table(D)
     chosen = {}
     for fam in DISCOVERY_FAMILIES:
@@ -117,6 +118,7 @@ def select_discovery_features(D: pd.DataFrame, min_lift: float = 1.10) -> dict:
             continue
         best = sub.sort_values("lift_leader20_volctl", ascending=False).iloc[0]
         chosen[fam] = {"feature": best["feature"], "lift": round(float(best["lift_leader20_volctl"]), 4)}
+    chosen = dict(sorted(chosen.items(), key=lambda kv: -kv[1]["lift"])[:max_families])
     return {"families": chosen, "table": t}
 
 

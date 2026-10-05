@@ -1,0 +1,20 @@
+﻿timestamp_utc,version,phase,step,decision,value,data_window,evidence,config_hash
+2026-10-05T16:07:01Z,V1,DISCOVERY,discovery_feature,family STRUCT -> hl_flag,lift=1.2582,2023-2024 purged,vol-controlled lift(leader20) top quintile,
+2026-10-05T16:07:01Z,V1,DISCOVERY,discovery_feature,family MKT_REL -> resid_5,lift=1.2152,2023-2024 purged,vol-controlled lift(leader20) top quintile,
+2026-10-05T16:07:01Z,V1,DISCOVERY,discovery_feature,family PERSIST -> cex_10,lift=1.21,2023-2024 purged,vol-controlled lift(leader20) top quintile,
+2026-10-05T16:07:01Z,V1,DISCOVERY,discovery_feature,family SECTOR_REL -> srs_5,lift=1.1903,2023-2024 purged,vol-controlled lift(leader20) top quintile,
+2026-10-05T16:07:01Z,V1,DISCOVERY,discovery_feature,family INDEP -> is_cnt10,lift=1.1553,2023-2024 purged,vol-controlled lift(leader20) top quintile,
+2026-10-05T16:07:23Z,V1,DISCOVERY,stage1_PROBE_DEFINITION,selected,"{'probe_q': 0.95, 'trigger': 'indep', 'regime_filter': 'all'}",2023-2024,objective=0.1966; n_candidates=12,
+2026-10-05T16:07:23Z,V1,DISCOVERY,stage2_FAILED_PROBE_EXIT,selected,"{'fail': 'F1+F2+F3+F4', 'time_stop': 5}",2023-2024,objective=0.2058; n_candidates=8,
+2026-10-05T16:07:23Z,V1,DISCOVERY,stage3_CONFIRMATION,selected,{'confirm': 'persist'},2023-2024,objective=0.2367; n_candidates=5,
+2026-10-05T16:07:23Z,V1,DISCOVERY,stage4_ADD_ARCHITECTURE,selected,{'add_arch': 'A'},2023-2024,objective=0.2367; n_candidates=3,
+2026-10-05T16:07:23Z,V1,DISCOVERY,stage5_EXIT,selected,{'exit': 'MP'},2023-2024,objective=0.2587; n_candidates=4,
+2026-10-05T16:07:23Z,V1,DISCOVERY,stage6_PORTFOLIO_CAPACITY,selected,"{'max_probes': 2, 'capital_arch': 'A', 'probe_reserve': 1.0}",2023-2024,objective=1.4361; n_candidates=9,
+2026-10-05T16:37:21Z,V1,VALIDATION,load_frozen,frozen config reused unchanged,q0.95|indep|all|F1+F2+F3+F4(5)|persist|A|MP|capA2,,frozen_utc=2026-10-05T16:07:23Z,eba0cff4a970
+2026-10-05T16:37:21Z,V1,VALIDATION,rerun_note,Report-only: audit survivorship count/type display fix and process disclosure. Rules unchanged.,,,rules/thresholds unchanged,eba0cff4a970
+2026-10-05T16:39:59Z,V1,VALIDATION,verdict_DISCOVERY,REJECT,,STRICT_OOS 2025-01-01~2026-09-03,OOS lift20=1.18 lift30=1.27 (Discovery lift20=1.26) MAE10 lift=1.11,eba0cff4a970
+2026-10-05T16:39:59Z,V1,VALIDATION,verdict_PROBE,WATCH,,STRICT_OOS 2025-01-01~2026-09-03,OOS PF=1.12 EV/probe=0.0019 slots n=385 placebo p=0.488,eba0cff4a970
+2026-10-05T16:39:59Z,V1,VALIDATION,verdict_FAILED_PROBE_EXIT,ACCEPT,,STRICT_OOS 2025-01-01~2026-09-03,OOS avg=-2.68% worst5%=-8.49% median hold=3.0 (Discovery avg=-3.52%),eba0cff4a970
+2026-10-05T16:39:59Z,V1,VALIDATION,verdict_CONFIRMATION,WATCH,,STRICT_OOS 2025-01-01~2026-09-03,OOS add-leg PF=1.22 P(>=20%|conf)=11.63% vs all=3.64% add premium med=8.64% R/R med=1.00,eba0cff4a970
+2026-10-05T16:39:59Z,V1,VALIDATION,verdict_ADD,ACCEPT,,STRICT_OOS 2025-01-01~2026-09-03,OOS PnL with add=0.73 vs probe-only=0.18 slots; eff 0.044 vs 0.026; PF 1.12 vs 1.06; Calmar -0.03 vs -0.19,eba0cff4a970
+2026-10-05T16:39:59Z,V1,VALIDATION,verdict_FULL_SYSTEM,REJECT,,STRICT_OOS 2025-01-01~2026-09-03,CAGR>0:✘; Sharpe>=0.8:✘; MDD>=-25%:✔; PF>=1.3:✘; stress CAGR>0:✘; stress PF>=1.1:✘; ex-top5>0:✘; 2025>0:✘; 2026YTD>0:✘; PROBE!=REJECT:✔,eba0cff4a970

@@ -1,0 +1,213 @@
+{
+ "version": "V1",
+ "frozen_utc": "2026-10-05T16:07:23Z",
+ "config": {
+  "version": "V1",
+  "disc_features": [
+   "hl_flag",
+   "resid_5",
+   "cex_10",
+   "srs_5",
+   "is_cnt10"
+  ],
+  "watch_q": 0.8,
+  "disc_q": 0.9,
+  "probe_q": 0.95,
+  "trigger": "indep",
+  "regime_filter": "all",
+  "max_stop_dist": 0.08,
+  "max_gap": 0.06,
+  "fail": "F1+F2+F3+F4",
+  "time_stop": 5,
+  "f3_thresh": -0.04,
+  "probe_max_life": 20,
+  "confirm": "persist",
+  "min_days_confirm": 2,
+  "add_arch": "A",
+  "exit": "MP",
+  "mfe_trigger": 0.15,
+  "cooldown": 5,
+  "max_probes": 2,
+  "capital_arch": "A",
+  "probe_reserve": 1.0,
+  "notes": {}
+ },
+ "hash": "eba0cff4a970",
+ "data_last_date": "2026-10-05",
+ "selection_window": [
+  "2023-01-01",
+  "2024-12-31"
+ ],
+ "discovery_features": {
+  "STRUCT": {
+   "feature": "hl_flag",
+   "lift": 1.2582
+  },
+  "MKT_REL": {
+   "feature": "resid_5",
+   "lift": 1.2152
+  },
+  "PERSIST": {
+   "feature": "cex_10",
+   "lift": 1.21
+  },
+  "SECTOR_REL": {
+   "feature": "srs_5",
+   "lift": 1.1903
+  },
+  "INDEP": {
+   "feature": "is_cnt10",
+   "lift": 1.1553
+  }
+ },
+ "criteria": {
+  "DISCOVERY": {
+   "ACCEPT": "OOS vol-controlled lift(leader20) >= 1.5 AND lift(leader30) >= 1.5 AND OOS lift >= 0.7 x Discovery lift AND lift(MAE<=-10%) < lift(leader20)",
+   "WATCH": "OOS vol-controlled lift(leader20) >= 1.2"
+  },
+  "PROBE": {
+   "ACCEPT": "OOS trade-level PF >= 1.3 AND EV/probe > 0 AND >= 50 probes AND EV beats matched-control placebo (bootstrap one-sided p < 0.10)",
+   "WATCH": "OOS PF >= 1.0 AND EV/probe > 0"
+  },
+  "FAILED_PROBE_EXIT": {
+   "ACCEPT": "OOS avg failed-probe return >= -6% AND worst-5% >= -12% AND median failed holding <= 10D AND OOS avg failed loss not worse than 1.5 x Discovery",
+   "WATCH": "OOS avg failed-probe return >= -8%"
+  },
+  "CONFIRMATION": {
+   "ACCEPT": "OOS add-leg PF >= 1.3 AND P(ret>=20% | confirmed) >= 2 x P(ret>=20% | all probes) AND median add premium <= 10% AND median add reward/risk >= 1.5",
+   "WATCH": "OOS add-leg PF >= 1.0"
+  },
+  "ADD": {
+   "ACCEPT": "OOS with-add vs probe-only (same probe size): total PnL higher AND PnL/100 slot-days higher AND PF not more than 10% lower AND portfolio Calmar not lower",
+   "WATCH": "OOS with-add total PnL higher"
+  },
+  "FULL_SYSTEM": {
+   "ACCEPT": "OOS 10-slot portfolio @0.45%+25bps: CAGR > 0, Sharpe >= 0.8, MDD >= -25%, campaign PF >= 1.3; @0.70%+50bps: CAGR > 0 and PF >= 1.1; PnL ex-top-5 campaigns > 0; 2025 and 2026YTD both > 0; PROBE verdict not REJECT",
+   "WATCH": "OOS portfolio CAGR > 0 and campaign PF >= 1.1"
+  }
+ },
+ "decisions": [
+  {
+   "timestamp_utc": "2026-10-05T16:07:01Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "discovery_feature",
+   "decision": "family STRUCT -> hl_flag",
+   "value": "lift=1.2582",
+   "data_window": "2023-2024 purged",
+   "evidence": "vol-controlled lift(leader20) top quintile",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:01Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "discovery_feature",
+   "decision": "family MKT_REL -> resid_5",
+   "value": "lift=1.2152",
+   "data_window": "2023-2024 purged",
+   "evidence": "vol-controlled lift(leader20) top quintile",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:01Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "discovery_feature",
+   "decision": "family PERSIST -> cex_10",
+   "value": "lift=1.21",
+   "data_window": "2023-2024 purged",
+   "evidence": "vol-controlled lift(leader20) top quintile",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:01Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "discovery_feature",
+   "decision": "family SECTOR_REL -> srs_5",
+   "value": "lift=1.1903",
+   "data_window": "2023-2024 purged",
+   "evidence": "vol-controlled lift(leader20) top quintile",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:01Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "discovery_feature",
+   "decision": "family INDEP -> is_cnt10",
+   "value": "lift=1.1553",
+   "data_window": "2023-2024 purged",
+   "evidence": "vol-controlled lift(leader20) top quintile",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:23Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "stage1_PROBE_DEFINITION",
+   "decision": "selected",
+   "value": "{'probe_q': 0.95, 'trigger': 'indep', 'regime_filter': 'all'}",
+   "data_window": "2023-2024",
+   "evidence": "objective=0.1966; n_candidates=12",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:23Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "stage2_FAILED_PROBE_EXIT",
+   "decision": "selected",
+   "value": "{'fail': 'F1+F2+F3+F4', 'time_stop': 5}",
+   "data_window": "2023-2024",
+   "evidence": "objective=0.2058; n_candidates=8",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:23Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "stage3_CONFIRMATION",
+   "decision": "selected",
+   "value": "{'confirm': 'persist'}",
+   "data_window": "2023-2024",
+   "evidence": "objective=0.2367; n_candidates=5",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:23Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "stage4_ADD_ARCHITECTURE",
+   "decision": "selected",
+   "value": "{'add_arch': 'A'}",
+   "data_window": "2023-2024",
+   "evidence": "objective=0.2367; n_candidates=3",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:23Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "stage5_EXIT",
+   "decision": "selected",
+   "value": "{'exit': 'MP'}",
+   "data_window": "2023-2024",
+   "evidence": "objective=0.2587; n_candidates=4",
+   "config_hash": ""
+  },
+  {
+   "timestamp_utc": "2026-10-05T16:07:23Z",
+   "version": "V1",
+   "phase": "DISCOVERY",
+   "step": "stage6_PORTFOLIO_CAPACITY",
+   "decision": "selected",
+   "value": "{'max_probes': 2, 'capital_arch': 'A', 'probe_reserve': 1.0}",
+   "data_window": "2023-2024",
+   "evidence": "objective=1.4361; n_candidates=9",
+   "config_hash": ""
+  }
+ ],
+ "data_source": "finmind"
+}

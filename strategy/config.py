@@ -67,7 +67,8 @@ class StrategyConfig:
     def short(self) -> str:
         return (f"q{self.probe_q:.2f}|{self.trigger}|{self.regime_filter}|{self.fail}"
                 f"{'' if 'F4' not in self.fail else f'({self.time_stop})'}|{self.confirm}|{self.add_arch}|"
-                f"{self.exit}|cap{self.capital_arch}{self.max_probes}")
+                f"{self.exit}|cap{self.capital_arch}{self.max_probes}"
+                f"{'' if self.capital_arch == 'A' else f'r{self.probe_reserve}'}")
 
     def hash(self) -> str:
         d = self.to_dict()

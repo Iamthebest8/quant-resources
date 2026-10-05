@@ -77,16 +77,17 @@ class DecisionLog:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-def run_tl(A, sc, cfg, start, end, cost=COST, slip=SLIP, keep=False):
+def run_tl(A, sc, cfg, start, end, cost=COST, slip=SLIP, keep=False, live=False):
     sig, rank, _ = sc.get(cfg)
     s, e = window_idx(A.dates, start, end)
-    return trade_level(A, sig, cfg, s, e, slip, cost, rank, keep_campaigns=keep)
+    return trade_level(A, sig, cfg, s, e, slip, cost, rank, keep_campaigns=keep, live=live)
 
 
-def run_pf(A, sc, cfg, start, end, cost=COST, slip_bps=config.BASE_SLIPPAGE_BPS, positions=False):
+def run_pf(A, sc, cfg, start, end, cost=COST, slip_bps=config.BASE_SLIPPAGE_BPS, positions=False, live=False):
     sig, rank, _ = sc.get(cfg)
     s, e = window_idx(A.dates, start, end)
-    return simulate_portfolio(A, sig, rank, cfg, s, e, cost=cost, slip_bps=slip_bps, record_positions=positions)
+    return simulate_portfolio(A, sig, rank, cfg, s, e, cost=cost, slip_bps=slip_bps, record_positions=positions,
+                              live=live)
 
 
 def years_of(start, end):
@@ -211,7 +212,7 @@ def validation_phase(p, F, L, R, A, sc, cfg: StrategyConfig, dlog: DecisionLog) 
     W = {"DISCOVERY": config.DISCOVERY, "EXTENDED": config.EXTENDED_VALIDATION, "STRICT_OOS": config.STRICT_OOS,
          "FULL": (config.RESEARCH_START, config.BACKTEST_END)}
     tl = {k: add_period(run_tl(A, sc, cfg, *w)) for k, w in W.items()}
-    live_df, live_camps = run_tl(A, sc, cfg, config.RESEARCH_START, str(p.dates[-1].date()), keep=True)
+    live_df, live_camps = run_tl(A, sc, cfg, config.RESEARCH_START, str(p.dates[-1].date()), keep=True, live=True)
     tl["LIVE"] = add_period(live_df)
     res["tl"] = tl
     tm = {k: campaign_metrics(v, years=years_of(*W[k]) if k in W else None) for k, v in tl.items()}
@@ -329,7 +330,7 @@ def validation_phase(p, F, L, R, A, sc, cfg: StrategyConfig, dlog: DecisionLog) 
     # ---------------- portfolio ---------------------------------------------------------------
     log("portfolio runs")
     pfr = {k: run_pf(A, sc, cfg, *w, positions=(k == "FULL")) for k, w in W.items()}
-    pfr["LIVE"] = run_pf(A, sc, cfg, config.RESEARCH_START, str(p.dates[-1].date()), positions=True)
+    pfr["LIVE"] = run_pf(A, sc, cfg, config.RESEARCH_START, str(p.dates[-1].date()), positions=True, live=True)
     res["pf"] = pfr
     eq = pfr["FULL"]["equity"].copy()
     m_close = p.market["close"].reindex(eq.index)
@@ -575,15 +576,20 @@ def campaign_state_rows(A, camps) -> pd.DataFrame:
                 s_ = "FULL"
             else:
                 continue
-            rows.append({"date": A.dates[d], "stock_id": sid, "state": s_, "camp_id": cid,
-                         **{k: v for k, v in r.items() if k not in ("day", "state")}})
+            row = {"date": A.dates[d], "stock_id": sid, "state": s_, "camp_id": cid,
+                   **{k: v for k, v in r.items() if k not in ("day", "state")}}
+            row["stop_adj"] = row.get("stop")
+            for k in ("close", "stop", "avg_cost"):
+                if k in row:
+                    row[k] = cp.raw_px(d, row[k])
+            rows.append(row)
         if cp.exit_day >= 0 and not cp.exit_reason.startswith("END"):
             st = "FAILED" if cp.state == "FAILED_PROBE" else "EXIT"
             for k in range(0, 5):
                 dd = cp.exit_day + k
                 if dd < len(A.dates):
                     rows.append({"date": A.dates[dd], "stock_id": sid, "state": st, "camp_id": cid,
-                                 "detail": cp.exit_reason, "exit_price": cp.exit_px})
+                                 "detail": cp.exit_reason, "exit_price": cp.raw_px(cp.exit_day, cp.exit_px)})
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -631,16 +637,20 @@ def write_dashboard_data(p, F, conds, cfg, A, live_camps, pf_live, res) -> None:
     for c in live_camps:
         for (d, e, px, sz, why) in c.events:
             ev.append({"camp_id": f"{A.ids[c.j]}_{A.dates[c.t].date()}", "stock_id": A.ids[c.j], "date": A.dates[d],
-                       "event": e, "price": px, "size": sz, "reason": why})
+                       "event": e, "price": c.raw_px(d, px), "price_adj": px, "size": sz, "reason": why})
     pd.DataFrame(ev).to_parquet(SIG_DIR / "campaign_events.parquet", index=False)
     # prices for charts (adjusted OHLC + raw close)
     px = pd.DataFrame({"open": p.o.stack(), "high": p.h.stack(), "low": p.l.stack(), "close": p.c.stack()})
     px["raw_close"] = p.raw_c.stack().reindex(px.index)
+    px["raw_open"] = p.raw_o.stack().reindex(px.index)
+    fac = (p.raw_c / p.c)
+    px["raw_high"] = (p.h * fac).stack().reindex(px.index)
+    px["raw_low"] = (p.l * fac).stack().reindex(px.index)
     px["value"] = p.val.stack().reindex(px.index)
     px.index.names = ["date", "stock_id"]
     px = px.reset_index()
     px = px[px["date"] >= start - pd.Timedelta(days=120)]
-    for c in ("open", "high", "low", "close", "raw_close", "value"):
+    for c in ("open", "high", "low", "close", "raw_close", "raw_open", "raw_high", "raw_low", "value"):
         px[c] = px[c].astype(np.float32)
     px.to_parquet(SIG_DIR / "prices.parquet", index=False)
     mk = F["mkt"].copy()
@@ -696,6 +706,7 @@ def main(argv=None):
     ap.add_argument("--version", default="V1")
     ap.add_argument("--refreeze", default=None, help="create a NEW version label (e.g. V2) by re-running Discovery")
     ap.add_argument("--skip-case", action="store_true")
+    ap.add_argument("--note", default=None, help="reason for a validation re-run (logged)")
     a = ap.parse_args(argv)
     p, F, L, R = prepare()
     A = build_arrays(p, F)
@@ -710,6 +721,8 @@ def main(argv=None):
         dlog.rows.extend(frozen.get("decisions", []))
         dlog.add(version, "VALIDATION", "load_frozen", "frozen config reused unchanged", cfg.short(), "",
                  f"frozen_utc={frozen['frozen_utc']}", frozen["hash"])
+        if a.note:
+            dlog.add(version, "VALIDATION", "rerun_note", a.note, "", "", "rules/thresholds unchanged", frozen["hash"])
     res = validation_phase(p, F, L, R, A, sc, cfg, dlog)
     if not a.skip_case:
         from research.case_study import run_case

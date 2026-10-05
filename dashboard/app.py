@@ -28,6 +28,15 @@ PERIODS = {"Discovery 2023–2024": "DISCOVERY", "Extended Validation 2024–202
            "Strict OOS 2025–2026": "STRICT_OOS", "Year-by-Year": "YEARLY"}
 
 
+def dshow(df: pd.DataFrame) -> pd.DataFrame:
+    """Format datetime columns as YYYY-MM-DD for display."""
+    df = df.copy()
+    for c in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[c]):
+            df[c] = df[c].dt.strftime("%Y-%m-%d")
+    return df
+
+
 def pct(x, d=1):
     return "—" if x is None or (isinstance(x, float) and not np.isfinite(x)) else f"{x * 100:.{d}f}%"
 
@@ -198,8 +207,16 @@ def page_stock():
         st.warning("無價格資料")
         return
     st.header(f"📈 {choice} · {asof.date()}")
-    win = st.radio("視窗", [60, 120, 250, 500], index=1, horizontal=True, format_func=lambda x: f"{x} 日")
-    px_w = px.iloc[-win:]
+    c_w, c_b = st.columns([2, 2])
+    win = c_w.radio("視窗", [60, 120, 250, 500], index=1, horizontal=True, format_func=lambda x: f"{x} 日")
+    basis = c_b.radio("價格基準", ["實際成交價（未還原）", "還原價（含息）"], horizontal=True)
+    raw_mode = basis.startswith("實際") and "raw_open" in px.columns
+    if raw_mode:
+        kp = px.rename(columns={"open": "a_open", "high": "a_high", "low": "a_low", "close": "a_close"}).rename(
+            columns={"raw_open": "open", "raw_high": "high", "raw_low": "low", "raw_close": "close"})
+    else:
+        kp = px
+    px_w = kp.iloc[-win:]
     mk = D.market()
     mk = mk[mk.index <= asof]
     sec = D.sector_stock(sid)
@@ -212,10 +229,11 @@ def page_stock():
     # --- price chart with events -------------------------------------------------------------
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
     fig.add_trace(go.Candlestick(x=px_w.index, open=px_w["open"], high=px_w["high"], low=px_w["low"],
-                                 close=px_w["close"], name="還原K線", increasing_line_color=C_UP,
+                                 close=px_w["close"], name="K線（實際價）" if raw_mode else "K線（還原）",
+                                 increasing_line_color=C_UP,
                                  decreasing_line_color=C_DN), row=1, col=1)
     for n, col in ((10, "#9085e9"), (20, "#eda100"), (60, "#52514e")):
-        ma = px["close"].rolling(n).mean().reindex(px_w.index)
+        ma = kp["close"].rolling(n).mean().reindex(px_w.index)
         fig.add_trace(go.Scatter(x=ma.index, y=ma, name=f"MA{n}", line=dict(width=1.5, color=col)), row=1, col=1)
     sym = {"PROBE": ("triangle-up", "Probe"), "CONFIRMED": ("star", "確認"), "ADD1": ("diamond", "加碼"),
            "ADD2": ("diamond", "加碼2"), "FULL": ("square", "Full"), "FAILED_PROBE": ("x", "試單失敗"),
@@ -224,14 +242,16 @@ def page_stock():
     for e, (mk_, lab) in sym.items():
         g = evw[evw["event"] == e]
         if len(g):
-            fig.add_trace(go.Scatter(x=g["date"], y=g["price"], mode="markers+text", name=lab, text=[lab] * len(g),
+            yv = g["price"] if (raw_mode or "price_adj" not in g) else g["price_adj"]
+            fig.add_trace(go.Scatter(x=g["date"], y=yv, mode="markers+text", name=lab, text=[lab] * len(g),
                                      textposition="top center", marker=dict(symbol=mk_, size=12, color="#0b0b0b",
                                                                             line=dict(width=2, color="white")),
                                      hovertemplate="%{x|%Y-%m-%d} " + lab + " @ %{y:.2f}<extra></extra>"), row=1, col=1)
     if len(stt) and "stop" in stt:
-        st_w = stt[stt["date"] >= px_w.index[0]].dropna(subset=["stop"])
+        scol = "stop" if (raw_mode or "stop_adj" not in stt) else "stop_adj"
+        st_w = stt[stt["date"] >= px_w.index[0]].dropna(subset=[scol])
         if len(st_w):
-            fig.add_trace(go.Scatter(x=st_w["date"], y=st_w["stop"], mode="markers", name="停損",
+            fig.add_trace(go.Scatter(x=st_w["date"], y=st_w[scol], mode="markers", name="停損",
                                      marker=dict(symbol="line-ew", size=10, line=dict(width=2, color=C_DN))),
                           row=1, col=1)
     val = px_w["value"] / 1e8
@@ -271,7 +291,8 @@ def page_stock():
         for col, (lab, g) in zip(cols, steps):
             if len(g):
                 r = g.iloc[0]
-                col.success(f"**{lab}**  \n{pd.Timestamp(r['date']).date()}  \n@ {r['price']:,.2f}  \nsize {r['size']:.2f}  \n{r['reason']}")
+                col.success(f"**{lab}**  \n{pd.Timestamp(r['date']).date()}  \n@ {r['price']:,.2f}（實際價）  \n"
+                            f"size {r['size']:.2f}  \n{r['reason']}")
             else:
                 col.info(f"**{lab}**  \n尚未發生")
     else:
@@ -323,7 +344,7 @@ def page_stock():
     if len(stt):
         t = stt.sort_values("date", ascending=False)[["date", "state_zh", "close", "stop", "size", "unrealized",
                                                       "detail"]].head(60)
-        st.dataframe(t, hide_index=True, use_container_width=True)
+        st.dataframe(dshow(t), hide_index=True, use_container_width=True)
     ip = D.case()[1]
     if len(ip) and sid == "3653":
         st.caption("盤中資料請見「3653 健策 Case Study」頁。")
@@ -368,22 +389,22 @@ def page_portfolio():
     info = D.stock_info().set_index("stock_id")
     p = pos[pos["date"] == eq.index[-1]].copy()
     p["名稱"] = p["stock_id"].map(info["name"])
-    p["未實現"] = p["close"] / p["avg_cost"] - 1
+    p["未實現"] = p["unrealized"] if "unrealized" in p else p["close"] / p["avg_cost"] - 1
     zh = {"PROBE": "Probe", "CONFIRMED": "Confirmed", "ADD": "Add 中", "FULL": "Full"}
     for stt, lab in (("PROBE", "Probe Positions"), ("CONFIRMED", "Confirmed Positions"), ("ADD", "Add 中"),
                      ("FULL", "Full Positions")):
         g = p[p["state"] == stt]
         st.markdown(f"**{lab}（{len(g)}）**")
         if len(g):
-            st.dataframe(g[["stock_id", "名稱", "probe_date", "size_slots", "avg_cost", "close", "未實現", "stop"]],
+            st.dataframe(dshow(g[["stock_id", "名稱", "probe_date", "size_slots", "avg_cost", "close", "未實現", "stop"]]),
                          hide_index=True, use_container_width=True)
     ft = tr[(tr["final_state"] == "FAILED_PROBE") & (tr["exit_date"] <= asof)].sort_values("exit_date",
                                                                                          ascending=False).head(20)
     st.markdown(f"**最近 Failed Probes（{len(ft)}）**")
     if len(ft):
         ft = ft.assign(名稱=ft["stock_id"].map(info["name"]))
-        st.dataframe(ft[["stock_id", "名稱", "probe_date", "probe_price", "exit_date", "exit_price", "exit_reason",
-                         "ret_on_invested", "pnl"]], hide_index=True, use_container_width=True)
+        st.dataframe(dshow(ft[["stock_id", "名稱", "probe_date", "probe_price", "exit_date", "exit_price", "exit_reason",
+                         "ret_on_invested", "pnl"]]), hide_index=True, use_container_width=True)
     _ = zh
 
 
@@ -395,7 +416,7 @@ def page_research():
     v = D.csv("FINAL_VERDICTS.csv")
     if len(v):
         st.subheader("最終裁決")
-        st.dataframe(v[["component", "verdict", "evidence"]], hide_index=True, use_container_width=True)
+        st.dataframe(dshow(v[["component", "verdict", "evidence"]]), hide_index=True, use_container_width=True)
     per = st.radio("期間", list(PERIODS), horizontal=True)
     key = PERIODS[per]
     ts = D.csv("TRADE_LEVEL_SUMMARY.csv")
@@ -403,7 +424,7 @@ def page_research():
     cap = D.csv("LEADER_CAPTURE_RATE.csv")
     if key == "YEARLY":
         y = D.csv("YEARLY_VALIDATION.csv")
-        st.dataframe(y, hide_index=True, use_container_width=True)
+        st.dataframe(dshow(y), hide_index=True, use_container_width=True)
     else:
         t = ts[ts["window"] == key]
         p = ps[ps["window"] == key]
@@ -428,7 +449,7 @@ def page_research():
         cp = cap[(cap["period"] == ("ALL" if key == "EXTENDED" else key))]
         if len(cp):
             st.subheader("Leader Capture Rate")
-            st.dataframe(cp, hide_index=True, use_container_width=True)
+            st.dataframe(dshow(cp), hide_index=True, use_container_width=True)
     st.subheader("Cost Sensitivity（Profit Factor）")
     cs = D.csv("PROBE_COST_ROBUSTNESS.csv")
     if len(cs):
@@ -443,15 +464,15 @@ def page_research():
         fig.update_layout(height=300, margin=dict(l=10, r=10, t=20, b=10), xaxis_title="單邊滑價",
                           yaxis_title="來回成本")
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(cs[cs["period"] == pn], hide_index=True, use_container_width=True)
+        st.dataframe(dshow(cs[cs["period"] == pn]), hide_index=True, use_container_width=True)
     st.subheader("Right Tail")
-    st.dataframe(D.csv("PROBE_RIGHT_TAIL.csv"), hide_index=True, use_container_width=True)
+    st.dataframe(dshow(D.csv("PROBE_RIGHT_TAIL.csv")), hide_index=True, use_container_width=True)
     st.subheader("Matched-control Placebo")
-    st.dataframe(D.csv("PLACEBO_MATCHED_CONTROLS.csv"), hide_index=True, use_container_width=True)
+    st.dataframe(dshow(D.csv("PLACEBO_MATCHED_CONTROLS.csv")), hide_index=True, use_container_width=True)
     with st.expander("Expanding validation（robustness only）"):
-        st.dataframe(D.csv("EXPANDING_VALIDATION.csv"), hide_index=True, use_container_width=True)
+        st.dataframe(dshow(D.csv("EXPANDING_VALIDATION.csv")), hide_index=True, use_container_width=True)
     with st.expander("Strategy decision log"):
-        st.dataframe(D.csv("STRATEGY_DECISION_LOG.csv"), hide_index=True, use_container_width=True)
+        st.dataframe(dshow(D.csv("STRATEGY_DECISION_LOG.csv")), hide_index=True, use_container_width=True)
     with st.expander("EMERGING_LEADER_STRATEGY.md"):
         st.markdown(D.doc("EMERGING_LEADER_STRATEGY.md"))
 
@@ -489,7 +510,7 @@ def page_case():
     cols = [c for c in ("date", "raw_close", "regime", "disc_pct", "watch", "emerging", "c_probe_score", "c_trigger",
                         "c_regime", "c_stop_ok", "probe_signal", "campaign_state", "position_size", "stop",
                         "portfolio_state", "events", "pct_time_above_vwap", "close_vs_vwap") if c in v.columns]
-    st.dataframe(v[cols], hide_index=True, use_container_width=True, height=420)
+    st.dataframe(dshow(v[cols]), hide_index=True, use_container_width=True, height=420)
     if len(ip):
         st.subheader("盤中：個股 / 大盤 / 產業 / VWAP（開盤 = 100）")
         days = sorted(d for d in ip["date"].unique() if pd.Timestamp(d) <= asof)
@@ -522,8 +543,9 @@ def page_data():
                 f"- 大盤資料：{meta.get('market_source')}")
     caps = meta.get("capabilities", {})
     if caps:
-        st.dataframe(pd.DataFrame(caps.values())[["label", "dataset", "status", "rows"]], hide_index=True,
-                     use_container_width=True)
+        cdf = pd.DataFrame(caps.values())
+        st.dataframe(dshow(cdf[[c for c in ("label", "dataset", "data_id", "status", "rows", "note") if c in cdf.columns]]),
+                     hide_index=True, use_container_width=True)
     st.subheader("更新資料")
     st.markdown("流程：讀取 `.env` → FinMind 增量下載（只抓快取之後的新交易日）→ 更新本地快取 → 用**凍結 V1** 重算最新訊號 → 刷新 Dashboard。"
                 "  \n完整重跑研究（含 OOS 報表）請用命令列 `python run_all.py`。")

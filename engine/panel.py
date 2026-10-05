@@ -142,7 +142,15 @@ def _sector_map(info: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
     df["generic"] = df["industry_category"].isin(GENERIC_SECTORS)
     df = df.sort_values(["stock_id", "generic"])
     first = df.groupby("stock_id").first()
-    return first["industry_category"], first["stock_name"], first.get("type", pd.Series(dtype=str))
+    # market type: prefer the current listing row (twse/tpex) over an older 興櫃 (emerging) row.
+    # NOTE: the industry above is kept exactly as frozen for V1 (most specific category of any row);
+    # for 27 stocks this differs from the current-listing row -> documented data issue for V2.
+    if "type" in df.columns:
+        df["nonmain"] = ~df["type"].isin(["twse", "tpex"])
+        typ = df.sort_values(["stock_id", "nonmain"]).groupby("stock_id")["type"].first()
+    else:
+        typ = pd.Series(dtype=str)
+    return first["industry_category"], first["stock_name"], typ
 
 
 _MIN_PAT = [("六十分鐘", 60), ("一小時", 60), ("二十五分鐘", 25), ("二十分鐘", 20), ("十分鐘", 10), ("五分鐘", 5),
@@ -190,9 +198,9 @@ def _load_adj(cache: FinMindCache, ids: list, dates: pd.DatetimeIndex, end: str 
         return None
     frames = []
     for f in sorted(d.glob("*.parquet")):
-        df = pd.read_parquet(f, columns=["date", "stock_id", "close", "Trading_Volume"])
-        if len(df):
-            frames.append(df)
+        df = pd.read_parquet(f)
+        if len(df) and {"date", "stock_id", "close", "Trading_Volume"} <= set(df.columns):
+            frames.append(df[["date", "stock_id", "close", "Trading_Volume"]])
     if not frames:
         return None
     a = pd.concat(frames, ignore_index=True)

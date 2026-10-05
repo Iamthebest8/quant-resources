@@ -1,0 +1,4 @@
+﻿train,test,selected_config,selected_features,test_n,test_pf,test_payoff,test_ev,test_pnl_per_100_slot_days,test_portfolio_cagr,test_portfolio_mdd,test_portfolio_sharpe,frozen_V1_test_pf,frozen_V1_test_pnl_per_100_slot_days
+2023-01-01~2023-12-31,2024-01-01~2024-12-31,q0.95|indep|not_up|F1+F2+F3+F4(5)|persist|A|MP|capA4,"hl_flag,cex_5,rs_slope_10,srs_5,is_cnt10",206,1.28984,6.76189,0.00391181,0.101426,0.0237824,-0.121786,0.312867,1.27246,0.100672
+2023-01-01~2024-12-31,2025-01-01~2025-12-31,q0.95|indep|all|F1+F2+F3+F4(5)|persist|A|MP|capA2,"hl_flag,resid_5,cex_10,srs_5,is_cnt10",283,1.27012,5.26521,0.00415518,0.0866556,0.00826157,-0.0682705,0.134036,1.27012,0.0866556
+2023-01-01~2025-12-31,2026-01-01~2026-09-03,q0.95|indep|not_up|F1+F2+F3+F4(5)|price+rs|A|HS|capA2,"cex_5,cex_10,progress_atr,srs_5,up60",26,0.537418,1.79139,-0.00985506,-0.194853,-0.0328271,-0.0797449,-0.400161,0.571041,-0.294329

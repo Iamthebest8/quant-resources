@@ -95,28 +95,38 @@ def data_audit(p, F) -> str:
     lines.append(md_table(pd.DataFrame(ds_rows)))
     ids = p.ids
     stype = p.stock_type.reindex(ids)
-    n_del = int(len(set(man.get("delisted_ids", [])) & set(ids)))
+    dl = cache.read("TaiwanStockDelisting", "_all")
+    if len(dl):
+        dl["date"] = pd.to_datetime(dl["date"])
+        dl = dl[(dl["date"] >= config.DATA_START) & dl["stock_id"].isin(ids)]
+    n_del = int(dl["stock_id"].nunique()) if len(dl) else 0
     valid = p.raw_c.notna()
     listed_span = valid.cumsum().gt(0) & valid[::-1].cumsum()[::-1].gt(0)
     miss = float(1 - valid[listed_span].sum().sum() / max(listed_span.sum().sum(), 1))
     lines.append(f"\n## 4. 股票池覆蓋\n\n- 期間：{p.dates[0].date()} ～ {p.dates[-1].date()}，{len(p.dates)} 個交易日\n"
                  f"- 普通股代號（4 碼、非 00 開頭、上市+上櫃；興櫃排除）：**{len(ids)}** 檔\n"
                  f"  - 上市 twse：{int((stype == 'twse').sum())}；上櫃 tpex：{int((stype == 'tpex').sum())}；"
-                 f"類型未知（多為已下市）：{int(stype.isna().sum())}\n"
-                 f"- 2021-06 之後下市櫃且納入回測的股票：**{n_del}** 檔（來源 TaiwanStockDelisting）\n"
+                 f"其他/未知：{int((~stype.isin(['twse', 'tpex'])).sum())}\n"
+                 f"- 2021-06 之後下市櫃、且有價格資料納入回測的普通股：**{n_del}** 檔"
+                 "（TaiwanStockInfo 保留已下市股票及其產業別；名單來源 TaiwanStockDelisting）\n"
                  f"- 每日可交易 universe（價格≥{config.MIN_PRICE}、20日均成交值≥{config.MIN_AVG_VALUE_20D / 1e6:.0f}M、"
                  f"上市≥{config.MIN_LISTED_DAYS}日）：平均 **{p.universe.sum(axis=1)[p.dates >= config.RESEARCH_START].mean():.0f}** 檔/日\n"
                  f"- 上市期間內缺漏（停牌/無成交）比例：{pct(miss, 2)}\n")
+    m_ = p.meta
     lines.append("\n## 5. 還原 / 未還原\n\n"
-                 "- 原始 `TaiwanStockPrice` 為**未還原**價格。\n"
-                 "- 本研究用 `spread`（=收盤−參考價，交易所公告之參考價已反映除權息/減資）計算每日總報酬 "
-                 "r = close/(close−spread)−1，再累乘得到還原價；比值型特徵與 PIT 序列完全一致，不會因事後還原而前視。\n"
-                 f"- spread 正負號一致性檢查：{p.meta.get('spread_sign_agree', float('nan')):.3f}；"
-                 f"被中和的除權息/減資跳空：{p.meta.get('corp_action_gaps')} 次。\n"
-                 "- `TaiwanStockPriceAdj` 可用，作為交叉檢查（見下）。\n")
-    adj_chk = p.meta.get("adj_check")
-    if adj_chk is not None and len(adj_chk):
-        lines.append(md_table(adj_chk))
+                 "- `TaiwanStockPrice` 為**未還原**價格（顯示、漲跌停判斷、價格門檻用）。\n"
+                 "- **重要發現**：FinMind `spread` 在除權息日為 0（例：2330 2024-09-12、2603 2023-06-30），"
+                 "若直接用 close/(close−spread) 會把除息日的真實漲跌（最多 ±10%）變成 0。\n"
+                 "- 因此每日總報酬的來源順序：① `TaiwanStockPriceAdj` 收盤比（FinMind 還原，除權息日正確）→ "
+                 "② spread 參考價（spread≠0 時）→ ③ 未還原收盤比（漲跌幅限制內）。還原價由每日報酬累乘重建；"
+                 "比值型特徵與 PIT 序列一致，無前視。\n"
+                 f"- 報酬來源筆數：PriceAdj {m_.get('ret_src_adj', 0):,}、spread {m_.get('ret_src_spread', 0):,}、"
+                 f"raw {m_.get('ret_src_raw', 0):,}；無法判定 {m_.get('ret_unresolved', 0):,}（視為 0）。"
+                 f"spread=0 但收盤有變動（除權息日）{m_.get('corp_action_gaps', 0):,} 筆。\n")
+    chk = OUT / "ADJUSTMENT_CHECK.csv"
+    if chk.exists():
+        lines.append("\n交叉檢查（spread 法 vs FinMind PriceAdj，修正前的獨立比對，15 檔樣本）：\n\n")
+        lines.append(md_table(pd.read_csv(chk, encoding="utf-8-sig")))
     sec = p.sector.reindex(ids)
     lines.append(f"\n## 6. 指數覆蓋\n\n- 大盤：{p.meta.get('market_source')}，{p.market['close'].first_valid_index().date()} ～ "
                  f"{p.market['close'].last_valid_index().date()}\n"
@@ -125,7 +135,9 @@ def data_audit(p, F) -> str:
                  f"- 產業數：{sec.nunique()}；UNKNOWN（多為已下市股票，info 中已無資料）：{int((sec == 'UNKNOWN').sum())} 檔\n"
                  f"- 籠統分類「電子工業」：{int((sec == '電子工業').sum())} 檔（例如 2330 被歸在此類），"
                  "降低 sector-relative 的精細度。\n"
-                 "- 產業成分 < 4 檔時 sector return 以大盤替代。\n")
+                 "- 產業成分 < 4 檔時 sector return 以大盤替代。\n"
+                 "- 同一檔在 TaiwanStockInfo 有多列（例如興櫃→上櫃、或多重分類）時，V1 取「最具體（非籠統）」的分類；"
+                 "其中 27 檔與目前上市列的分類不同（例：1563 電機機械 vs 汽車工業）。V1 凍結後不再更動，列為 V2 資料改善項目。\n")
     dt = p.meta.get("disposition_table")
     n_disp = 0 if dt is None else len(dt)
     lines.append(f"\n## 8. 處置股票覆蓋\n\n- 來源：TaiwanStockDispositionSecuritiesPeriod，普通股處置事件 {n_disp} 筆"
@@ -142,9 +154,9 @@ def data_audit(p, F) -> str:
                  "- 全市場研究的盤中特徵改用日線 proxy：open→close、收盤位置 CLV、low→close recovery、相對大盤版本 → "
                  "**INTRADAY_LIMITATION**。\n")
     lines.append("\n## 10. Survivorship bias\n\n"
-                 f"- 已納入 2021-06 之後下市櫃的普通股 {n_del} 檔（價格資料至下市日）。\n"
+                 f"- 已納入 2021-06 之後下市櫃的普通股 {n_del} 檔（價格資料至下市日，產業別仍可取得）。\n"
                  "- 回測中持股遇停止交易 → 以最後收盤價出場（標記 DELISTED/SUSPENDED）。\n"
-                 "- 殘留風險：下市股票在 TaiwanStockInfo 中已無產業別（→ UNKNOWN）；2021-06 之前下市者不影響 2023+ 研究。\n"
+                 "- 殘留風險：2021-06 之前下市者不影響 2023+ 研究；下市前最後幾日的流動性/處置限制以日線近似。\n"
                  f"- datalist 中不在 info/delisting 名單的普通股代號：{man.get('datalist_extra_ids_count', 'n/a')} 個（多為更早下市，未下載）。\n"
                  "- 判定：**SURVIVORSHIP_BIAS_RISK = LOW（已處理下市股；產業別有殘留缺口）**\n")
     lines.append("\n## 11. PIT 風險\n\n"
@@ -158,7 +170,8 @@ def data_audit(p, F) -> str:
                  "- 帳戶額度端點被環境封鎖 → 無法顯示剩餘額度；client 內建 402 rate-limit 等待重試。\n"
                  "- 全市場單日 `TaiwanStockPrice` 含權證（約 4.8 萬列/日），歷史改以逐檔下載，增量更新才用單日全市場。\n"
                  "- KBar / 5 秒資料一次一天。\n"
-                 "- 資料非即時：最新為上一個收盤後 FinMind 更新的日線。\n")
+                 "- 資料非即時：最新為上一個收盤後 FinMind 更新的日線。\n"
+                 "- 高價股（如 3653 單價數千元）以金額計部位，假設可用盤中零股成交；零股流動性較整股差 → EXECUTION_RISK。\n")
     return "".join(lines)
 
 
@@ -173,7 +186,7 @@ def strategy_doc(cfg, res) -> str:
          f"Config hash：`{frozen['hash']}`\n\n"
          "> 核心：DISCOVER EARLY · RISK SMALL · ADD ONLY WHEN RIGHT · LET WINNERS MATTER\n\n"]
     L.append("## 1. 資料流程\n\n```\nFinMind API (data/finmind_client.py)\n    ↓\nRaw Local Cache (data/cache/raw/*.parquet, manifest.json)\n"
-             "    ↓\nClean / PIT Dataset (engine/panel.py：spread 還原、universe、產業、處置)\n    ↓\nResearch Engine "
+             "    ↓\nClean / PIT Dataset (engine/panel.py：PriceAdj/spread 總報酬、universe、產業、處置)\n    ↓\nResearch Engine "
              "(engine/features.py, research/*)\n    ↓\nStrategy Engine (strategy/engine.py 狀態機)\n    ↓\n"
              "Portfolio Simulator (strategy/portfolio.py 10-slot)\n    ↓\n中文 Dashboard (dashboard/app.py)\n```\n\n")
     L.append("## 2. 凍結規則（V1）\n\n")
@@ -215,6 +228,13 @@ def strategy_doc(cfg, res) -> str:
              "- 2024 同時屬於 Discovery 與 Extended Validation → 2024 **不是** OOS。\n"
              "- 2025-01-01 ～ 2026-09-03 為 Strict OOS；看到 OOS 後若修改規則必須以 `--refreeze V2` 建立新版本並記錄於 "
              "STRATEGY_DECISION_LOG.csv。\n- 健策 3653 只作 case study / regression test，未參與任何門檻選擇。\n")
+    L.append("\n## 7. 研究流程揭露\n\n"
+             "1. 全部程式（特徵、狀態機、選參流程、判定標準）先以**離線合成資料**開發與測試，接上 FinMind 前未看過任何真實結果。\n"
+             "2. 接上真實資料後、**凍結前**做的兩項修改：(a) 發現 FinMind `spread` 在除權息日為 0，改用 `TaiwanStockPriceAdj` 計算每日報酬；"
+             "(b) Discovery score 最多 5 個 family（避免黑箱）。兩者都在第一次真實 Discovery 選參之前。\n"
+             "3. **凍結後**的重跑只有報表/工程修正（事件價格改列實際成交價、live 模式不強制平倉、文字），"
+             "設定 hash 不變、OOS 數字不變，每次都記錄在 STRATEGY_DECISION_LOG.csv（rerun_note）。\n"
+             "4. 看過 OOS 後觀察到的改進方向（Exit 讓贏家跑、避免太早、ATR 停損）只列為 V2 假說，**沒有**套用到 V1。\n")
     return "".join(L)
 
 
@@ -288,7 +308,7 @@ def case_doc(case: dict, cfg) -> str:
          f"| Confirmation | {fmt_ev(case['confirm'])} |\n| Add | {fmt_ev(case['add'])} |\n| Add 2 | {fmt_ev(case['add2'])} |\n"
          f"| Full | {fmt_ev(case['full'])} |\n| Failed probe | {fmt_ev(case['failed'])} |\n| Exit | {fmt_ev(case['exit'])} |\n"
          f"| 真正脫離大盤（stock−market > 5 點且之後不再落後） | {d(case['breakaway'])} |\n"
-         "\n※ 價格為還原價（spread 還原）；原始收盤價見 3653_TIMELINE.csv `raw_close`。\n"]
+         "\n※ 價格皆為**實際（未還原）成交價**；報酬計算使用還原價。\n"]
     L.append("\n## 2. Probe 條件逐項（期間內不成立天數）\n\n| 條件 | 不成立天數 |\n|---|---|\n")
     from strategy.signals import PROBE_CONDITION_LABELS
     for k, n in fc.items():
@@ -372,7 +392,10 @@ def final_report(p, cfg, res) -> str:
          "## 最終裁決\n\n| 元件 | 裁決 | 證據 |\n|---|---|---|\n"]
     for k, (vv, why) in v.items():
         L.append(f"| {k} | **{vv}** | {why} |\n")
-    L.append("\n## 40 個問題\n\n")
+    notes = OUT / f"RESEARCHER_NOTES_{cfg.version}.md"
+    if notes.exists():
+        L.append("\n" + notes.read_text(encoding="utf-8") + "\n")
+    L.append("\n## 40 個問題（數字由本次 pipeline 自動填入）\n\n")
     L.append(q(1, f"能否提早辨認？Discovery score 前 {1 - cfg.disc_q:.0%} 的 vol-controlled leader(+20%/40D) lift："
                   f"Discovery {num(ds_l['lift_leader20_volctl'].iloc[0] if len(ds_l) else np.nan)}、"
                   f"Strict OOS {num(os_l['lift_leader20_volctl'].iloc[0] if len(os_l) else np.nan)}（+30%："
@@ -411,11 +434,17 @@ def final_report(p, cfg, res) -> str:
     L.append(q(14, f"Add 後 payoff（OOS）：有加碼 {num(mo.get('payoff'))} vs 只試單({na}) {num(archm('STRICT_OOS', na, 'payoff'))}。"))
     L.append(q(15, f"PF（OOS）：有加碼 {num(mo.get('pf'))} vs 只試單 {num(archm('STRICT_OOS', na, 'pf'))}。"))
     for n_, k in ((16, "ge20"), (17, "ge30"), (18, "ge40")):
-        L.append(q(n_, f"{k.replace('ge', '≥')}% Winner（OOS 筆數）：有加碼 {mo.get(k)} vs 只試單 {archm('STRICT_OOS', na, k)}"
-                       f"（以 PnL 計，加碼把贏家的權重放大；筆數相同代表加碼不改變誰會贏，只改變贏多少）。"))
-    L.append(q(19, f"Leader Capture Rate（全期，早期 Probe 到、價格未超過漲幅一半）：+20% {pct(c20[0])}（{c20[1]} 段，隨機基準 {pct(c20[2])}）、"
-                   f"+30% {pct(c30[0])}（隨機 {pct(c30[2])}）、+40% {pct(c40[0])}（隨機 {pct(c40[2])}）；OOS +30% {pct(o30[0])}；"
-                   f"10-slot 組合實際持有 +30% {pct(p30[0])}。"))
+        L.append(q(n_, f"{k.replace('ge', '≥')}% Winner（OOS，以投入資金報酬率計的筆數）：有加碼 {mo.get(k)} vs 只試單 "
+                       f"{archm('STRICT_OOS', na, k)}；Discovery：有加碼 {md.get(k)} vs 只試單 {archm('DISCOVERY', na, k)}。"
+                       "加碼後平均成本墊高，報酬率門檻達標筆數不一定增加，但贏家的 PnL（slot）被放大。"))
+    def anyr(thr, src="trade_level(unconstrained)", per="ALL"):
+        x = cap[(cap["source"] == src) & (cap["threshold"] == thr) & (cap["period"] == per)]
+        return x["any_probe_rate"].iloc[0] if len(x) else np.nan
+    L.append(q(19, f"Leader Capture Rate（2023–2026-09 未來 40 日漲幅段；early = 漲幅一半之前就 Probe）："
+                   f"+20% early {pct(c20[0])}／任何時點 {pct(anyr('>=20%'))}（{c20[1]} 段）；"
+                   f"+30% early {pct(c30[0])}／任何 {pct(anyr('>=30%'))}；+40% early {pct(c40[0])}／任何 {pct(anyr('>=40%'))}。"
+                   f"同樣數量的隨機 Probe 碰到該股的機率約 {pct(c30[2])}（應與「任何時點」比較）。OOS +30% early {pct(o30[0])}；"
+                   f"10-slot 組合實際持有 +30% early {pct(p30[0])}。"))
     L.append(q(20, "False Positive 主要來源（失敗 Probe vs ≥20% 贏家的標準化差異最大者）：" + "；".join(
         f"`{r.item}` 失敗中位 {num(r.false_probe_median, 3)} vs 贏家 {num(r.big_winner_median, 3)} (SMD {num(r.smd)})"
         for r in fsmd.itertuples())))
@@ -431,8 +460,10 @@ def final_report(p, cfg, res) -> str:
                    f"平均占用 {pct(po['avg_occupancy'])}；同期 TAIEX {pct(po['taiex_return'])}（總報酬比較見 PORTFOLIO_SUMMARY.csv）。"))
     L.append(q(24, f"PnL/100 slot-days：trade-level OOS {num(mo.get('pnl_per_100_slot_days'), 3)} slot、"
                    f"組合 OOS {num(po.get('pnl_per_100_slot_days_pct'), 3)}%；只試單 {num(archm('STRICT_OOS', na, 'pnl_per_100_slot_days'), 3)}。"))
-    L.append(q(25, f"Top 5 依賴（OOS）：前 5 筆占總 PnL {pct(mo.get('top5_trades_share'))}，去掉前 5 筆 PnL = "
-                   f"{num(mo.get('pnl_ex_top5_slots'), 2)} slot；前 5% 交易占 {pct(mo.get('top5pct_share'))}。"))
+    L.append(q(25, f"Top 5 依賴：OOS 總 PnL {num(mo.get('total_pnl_slots'), 2)} slot，前 5 筆 = 總 PnL 的 "
+                   f"{pct(mo.get('top5_trades_share'))}，去掉前 5 筆 = {num(mo.get('pnl_ex_top5_slots'), 2)} slot"
+                   f"（{'為負 → 高度依賴少數贏家' if (mo.get('pnl_ex_top5_slots') or 0) < 0 else '仍為正'}）；Discovery 去掉前 5 筆 = "
+                   f"{num(md.get('pnl_ex_top5_slots'), 2)} slot。"))
     for n_, y in ((26, "2023"), (27, "2024"), (28, "2025"), (29, "2026YTD")):
         t_ = yt.loc[y] if y in yt.index else {}
         pp = yp.loc[y] if y in yp.index else {}
@@ -444,14 +475,18 @@ def final_report(p, cfg, res) -> str:
                                          f"{x[0].date()} @ {x[1]:,.2f}")
     if case.get("found"):
         nat = bool(case.get("probe"))
-        L.append(q(30, f"健策是否被自然發現：{'是' if case.get('first_emerging') else '否'}（Emerging）；"
-                       f"{'有' if nat else '沒有'} Probe。"))
+        L.append(q(30, f"健策是否被自然發現：{'是，進入 Emerging' if case.get('first_emerging') else '否'}；"
+                       f"{'有 Probe' if nat else '沒有 Probe'}；Confirmation {'有' if case.get('confirm') else '沒有'}；"
+                       f"{'試單失敗出場：' + dd(case.get('failed')) if case.get('failed') else ''}"))
         L.append(q(31, f"第一次 Discovery：{dd(case.get('first_emerging'))}（觀察：{dd(case.get('first_watch'))}）"))
         L.append(q(32, f"第一次 Probe：{dd(case.get('probe'))}"))
         L.append(q(33, f"Confirmation：{dd(case.get('confirm'))}"))
         L.append(q(34, f"Add：{dd(case.get('add'))}；Full：{dd(case.get('full'))}"))
         fc = case.get("fail_counts", {})
-        L.append(q(35, "若沒抓到的原因（期間內各條件不成立天數）：" + "、".join(f"{k}={v_}" for k, v_ in fc.items())))
+        from strategy.signals import PROBE_CONDITION_LABELS as PCL
+        L.append(q(35, "沒有抓到主升段的原因（期間 63 個交易日中各 Probe 條件不成立天數）：" +
+                       "、".join(f"{PCL.get(k, k)} {v_} 日" for k, v_ in fc.items()) +
+                       "。詳見 3653_CASE_STUDY.md。"))
     else:
         for n_ in range(30, 36):
             L.append(q(n_, "健策不在資料中。"))
