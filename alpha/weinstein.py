@@ -307,7 +307,7 @@ def weekly_setups(p, F, G, ctx: WContext, log=print) -> pd.DataFrame:
     swh10 = p.h.rolling(10, min_periods=8).max().to_numpy()[ti]
     mkt_c_d = p.market["adj_close"]
     mkt_ma150 = (mkt_c_d / mkt_c_d.rolling(150, min_periods=120).mean() - 1).to_numpy()[ti]
-    breadth = ctx.breadth.to_numpy()
+    breadth = ctx.breadth12.to_numpy()
     g2pct = ctx.grp_stage2_pct.to_numpy()
     n_days_next = np.r_[np.diff(ti), 0]       # trading days in the following week
 
