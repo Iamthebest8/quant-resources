@@ -723,7 +723,19 @@ def main(argv=None):
                  f"frozen_utc={frozen['frozen_utc']}", frozen["hash"])
         if a.note:
             dlog.add(version, "VALIDATION", "rerun_note", a.note, "", "", "rules/thresholds unchanged", frozen["hash"])
+    hist_f = FROZEN / f"{version}_runs.jsonl"
+    if hist_f.exists():                       # every earlier validation run of this frozen version
+        for line in hist_f.read_text(encoding="utf-8").splitlines():
+            h = json.loads(line)
+            dlog.add(version, "VALIDATION_HISTORY", "validation_run", h.get("note", ""),
+                     json.dumps(h.get("verdicts", {}), ensure_ascii=False), "", h.get("source", ""),
+                     h.get("config_hash", ""), ts=h.get("timestamp_utc"))
+    run_ts = now_utc()
     res = validation_phase(p, F, L, R, A, sc, cfg, dlog)
+    with hist_f.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"timestamp_utc": run_ts, "note": a.note or "validation run", "config_hash": cfg.hash(),
+                             "verdicts": {k: v[0] for k, v in res["verdicts"].items()}, "source": "pipeline"},
+                            ensure_ascii=False) + "\n")
     if not a.skip_case:
         from research.case_study import run_case
         res["case"] = run_case(p, F, cfg, A, sc, res)
